@@ -7,7 +7,7 @@ from app.models.order import Order, OrderItem, OrderStatusHistory, OrderStatus, 
 from app.models.service_request import ServiceRequest, ServiceRequestType, ServiceRequestStatus
 from app.models.reservation import Reservation, ReservationStatus
 from app.models.billing import Bill, BillSplit, Payment, BillStatus, SplitType, PaymentMethod, PaymentRecordStatus
-from app.models.feedback import Feedback
+from app.models.feedback import Feedback, FeedbackDishRating, FeedbackPhoto
 
 __all__ = [
     "Base",
@@ -39,5 +39,7 @@ __all__ = [
     "SplitType",
     "PaymentMethod",
     "PaymentRecordStatus",
-    "Feedback"
+    "Feedback",
+    "FeedbackDishRating",
+    "FeedbackPhoto"
 ]

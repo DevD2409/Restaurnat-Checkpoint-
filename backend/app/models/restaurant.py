@@ -50,6 +50,10 @@ class Restaurant(Base):
     grace_period_days = Column(Integer, default=7)
     owner_id = Column(Integer, nullable=True)
     
+    # Customer Feedback & Google Reviews Configuration
+    google_review_url = Column(String(500), nullable=True)
+    allow_feedback_edits = Column(Boolean, default=False)
+    
     opening_time = Column(String(20), default="10:00 AM")
     closing_time = Column(String(20), default="11:30 PM")
     is_active = Column(Boolean, default=True)

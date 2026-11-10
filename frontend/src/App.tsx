@@ -33,6 +33,7 @@ import { ReservationsAdminPage } from './pages/admin/ReservationsAdminPage';
 import { BillingAdminPage } from './pages/admin/BillingAdminPage';
 import { RestaurantSettingsPage } from './pages/admin/RestaurantSettingsPage';
 import { SubscriptionPage } from './pages/admin/SubscriptionPage';
+import { CustomerFeedbackPage } from './pages/admin/CustomerFeedbackPage';
 
 // Auth & Platform Pages
 import { LoginPage } from './pages/auth/LoginPage';
@@ -110,6 +111,7 @@ export function App() {
                 <Route path="staff" element={<StaffManagementPage />} />
                 <Route path="reservations" element={<ReservationsAdminPage />} />
                 <Route path="billing" element={<BillingAdminPage />} />
+                <Route path="feedback" element={<CustomerFeedbackPage />} />
                 <Route path="subscription" element={<SubscriptionPage />} />
                 <Route path="settings" element={<RestaurantSettingsPage />} />
               </Route>

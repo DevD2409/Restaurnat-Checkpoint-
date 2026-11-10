@@ -23,6 +23,8 @@ from app.routers.payments import router as payments_router
 from app.routers.analytics import router as analytics_router
 from app.routers.onboarding import router as onboarding_router
 from app.routers.super_admin import router as super_admin_router
+import os
+from fastapi.staticfiles import StaticFiles
 from app.routers.feedback import router as feedback_router
 from app.routers.subscriptions import router as subscriptions_router
 
@@ -69,6 +71,11 @@ app.include_router(onboarding_router, prefix=settings.API_V1_STR)
 app.include_router(super_admin_router, prefix=settings.API_V1_STR)
 app.include_router(feedback_router, prefix=settings.API_V1_STR)
 app.include_router(subscriptions_router, prefix=settings.API_V1_STR)
+
+# Static files directory for uploads and media
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+os.makedirs(os.path.join(STATIC_DIR, "uploads", "feedback"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/health")
 def health_check():

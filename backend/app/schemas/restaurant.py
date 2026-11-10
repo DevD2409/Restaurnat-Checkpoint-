@@ -26,8 +26,11 @@ class RestaurantBase(BaseModel):
     wifi_instructions: Optional[str] = None
     opening_time: Optional[str] = None
     closing_time: Optional[str] = None
+    google_review_url: Optional[str] = None
     subscription_plan: str = "PRO"
     subscription_status: str = "ACTIVE"
+    google_review_url: Optional[str] = None
+    allow_feedback_edits: bool = False
     is_active: bool = True
 
 class RestaurantUpdate(BaseModel):
@@ -54,6 +57,7 @@ class RestaurantUpdate(BaseModel):
     wifi_instructions: Optional[str] = None
     opening_time: Optional[str] = None
     closing_time: Optional[str] = None
+    google_review_url: Optional[str] = None
     razorpay_key_id: Optional[str] = None
     razorpay_key_secret: Optional[str] = None
     razorpay_key_secret_enc: Optional[str] = None
@@ -61,6 +65,8 @@ class RestaurantUpdate(BaseModel):
     razorpay_webhook_secret_enc: Optional[str] = None
     razorpay_account_id: Optional[str] = None
     payment_gateway_mode: Optional[str] = None
+    google_review_url: Optional[str] = None
+    allow_feedback_edits: Optional[bool] = None
     is_active: Optional[bool] = None
 
 class RestaurantResponse(RestaurantBase):
@@ -99,6 +105,7 @@ class RestaurantPublicProfile(BaseModel):
     wifi_instructions: Optional[str] = None
     opening_time: Optional[str] = None
     closing_time: Optional[str] = None
+    google_review_url: Optional[str] = None
 
     class Config:
         from_attributes = True

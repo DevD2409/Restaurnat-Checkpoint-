@@ -54,6 +54,7 @@ class Order(Base):
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     status_history = relationship("OrderStatusHistory", back_populates="order", cascade="all, delete-orphan")
     bill = relationship("Bill", back_populates="order", uselist=False)
+    feedback = relationship("Feedback", back_populates="order", uselist=False)
 
 class OrderItem(Base):
     __tablename__ = "order_items"

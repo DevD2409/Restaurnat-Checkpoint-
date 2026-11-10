@@ -2,7 +2,8 @@ import axios from 'axios';
 import {
   User, Restaurant, Table, MenuCategory, MenuItem,
   Order, ServiceRequest, Reservation, Bill, BillSplit,
-  AnalyticsResponse, ServiceRequestStatus, OrderStatus
+  AnalyticsResponse, ServiceRequestStatus, OrderStatus,
+  Feedback, FeedbackAnalytics
 } from '../types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
@@ -53,8 +54,10 @@ export const authApi = {
 
 // Restaurant Profile API
 export const restaurantApi = {
-  getProfile: async () => {
-    const res = await apiClient.get<Restaurant>('/restaurants/');
+  getProfile: async (restaurantId?: number) => {
+    const res = await apiClient.get<Restaurant>('/restaurants/', {
+      params: restaurantId ? { restaurant_id: restaurantId } : undefined
+    });
     return res.data;
   },
   updateProfile: async (data: Partial<Restaurant>) => {
@@ -353,6 +356,51 @@ export const subscriptionsApi = {
       amount_paise: amountPaise,
       reason
     });
+    return res.data;
+  },
+};
+
+// Feedback & Rating API
+export const feedbackApi = {
+  submit: async (data: any) => {
+    const res = await apiClient.post<Feedback>('/feedback/', data);
+    return res.data;
+  },
+  uploadPhoto: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await apiClient.post('/feedback/upload-photo', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data;
+  },
+  getPublic: async (restaurantId: number) => {
+    const res = await apiClient.get<Feedback[]>(`/feedback/restaurant/${restaurantId}`);
+    return res.data;
+  },
+  list: async (params?: {
+    restaurant_id?: number;
+    status_filter?: string;
+    min_rating?: number;
+    max_rating?: number;
+  }) => {
+    const res = await apiClient.get<Feedback[]>('/feedback/', { params });
+    return res.data;
+  },
+  getAnalytics: async (restaurantId?: number) => {
+    const res = await apiClient.get<FeedbackAnalytics>('/feedback/analytics', {
+      params: { restaurant_id: restaurantId }
+    });
+    return res.data;
+  },
+  moderate: async (id: number, data: { status: string; flag_reason?: string; is_published?: boolean }) => {
+    const res = await apiClient.patch<Feedback>(`/feedback/${id}/moderate`, data);
+    return res.data;
+  },
+  report: async (id: number, reason: string) => {
+    const res = await apiClient.post(`/feedback/${id}/report`, { reason });
     return res.data;
   },
 };

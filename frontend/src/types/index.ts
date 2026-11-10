@@ -52,6 +52,8 @@ export interface Restaurant {
   wifi_instructions?: string;
   opening_time?: string;
   closing_time?: string;
+  google_review_url?: string;
+  allow_feedback_edits?: boolean;
   is_active: boolean;
 }
 
@@ -75,12 +77,34 @@ export interface RestaurantPublicProfile {
   wifi_ssid?: string;
   opening_time?: string;
   closing_time?: string;
+  google_review_url?: string;
+  allow_feedback_edits?: boolean;
+}
+
+export interface DishRating {
+  id?: number;
+  menu_item_id?: number;
+  dish_name: string;
+  rating: number;
+  comment?: string;
+}
+
+export interface FeedbackPhoto {
+  id?: number;
+  photo_url: string;
+  file_size_bytes?: number;
+  mime_type?: string;
+  moderation_status?: string;
 }
 
 export interface Feedback {
   id: number;
   restaurant_id: number;
+  order_id?: number;
+  order_number?: string;
+  table_id?: number;
   customer_name: string;
+  customer_phone?: string;
   overall_rating: number;
   rating?: number;
   food_rating?: number;
@@ -88,7 +112,51 @@ export interface Feedback {
   ambience_rating?: number;
   cleanliness_rating?: number;
   comment?: string;
+  comments?: string;
+  status?: string;
+  is_published?: boolean;
+  is_verified_dining?: boolean;
+  flag_reason?: string;
+  dish_ratings?: DishRating[];
+  photos?: FeedbackPhoto[];
+  google_review_url?: string;
+  google_review_notice?: string;
   created_at: string;
+  updated_at?: string;
+}
+
+export interface DishRatingAnalytics {
+  menu_item_id?: number;
+  dish_name: string;
+  average_rating: number;
+  review_count: number;
+  positive_percentage: number;
+}
+
+export interface ReviewTrendPoint {
+  date: string;
+  average_rating: number;
+  review_count: number;
+}
+
+export interface FeedbackAnalytics {
+  restaurant_id: number;
+  restaurant_name: string;
+  total_reviews: number;
+  verified_dining_percentage: number;
+  average_overall: number;
+  average_food: number;
+  average_service: number;
+  average_ambience: number;
+  average_cleanliness: number;
+  rating_breakdown: Record<string, number>;
+  dish_ratings: DishRatingAnalytics[];
+  top_rated_dishes: DishRatingAnalytics[];
+  low_rated_dishes: DishRatingAnalytics[];
+  review_trends: ReviewTrendPoint[];
+  google_review_url?: string;
+  allow_feedback_edits: boolean;
+  moderation_counts: Record<string, number>;
 }
 
 export interface PlatformStats {

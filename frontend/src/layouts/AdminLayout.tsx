@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, UtensilsCrossed, Grid,
   Users, CalendarCheck, Receipt, Settings, ChefHat,
-  Bell, LogOut, ShieldCheck, ExternalLink, Menu, X, Sparkles, Globe
+  Bell, LogOut, ShieldCheck, ExternalLink, Menu, X, Sparkles, Globe, Star
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -30,6 +30,7 @@ export const AdminLayout: React.FC = () => {
     { label: 'Floor & Tables', path: '/admin/tables', icon: Grid },
     { label: 'Reservations', path: '/admin/reservations', icon: CalendarCheck },
     { label: 'Billing & Invoices', path: '/admin/billing', icon: Receipt },
+    { label: 'Customer Reviews', path: '/admin/feedback', icon: Star },
     { label: 'SaaS Subscription', path: '/admin/subscription', icon: Sparkles },
     { label: 'Staff & Roles', path: '/admin/staff', icon: Users },
     { label: 'Restaurant Settings', path: '/admin/settings', icon: Settings },
