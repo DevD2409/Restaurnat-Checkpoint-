@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any
-from fastapi import APIRouter, Depends
+from typing import List, Dict, Any, Optional
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, asc
 from app.core.database import get_db
+from app.core.dependencies import oauth2_scheme, require_roles
+from app.core.security import decode_access_token
+from app.models.user import User, UserRole
 from app.models.billing import Bill, Payment, BillStatus, PaymentRecordStatus
 from app.models.order import Order, OrderItem, OrderStatus, PaymentStatus
 from app.models.table import Table, TableStatus, TableSession
@@ -16,26 +19,49 @@ from app.schemas.analytics import (
 router = APIRouter(prefix="/analytics", tags=["Sales Analytics & Operational KPIs"])
 
 @router.get("/overview", response_model=AnalyticsResponse)
-def get_analytics_overview(db: Session = Depends(get_db)):
-    # 1. Total Revenue from successful payments
-    total_rev_result = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).filter(
+def get_analytics_overview(
+    restaurant_id: Optional[int] = Query(None),
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    target_id = restaurant_id
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user:
+                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
+                    target_id = user.restaurant_id
+    if target_id is None:
+        target_id = 1
+
+    # 1. Total Revenue from successful payments for THIS restaurant
+    total_rev_result = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).join(
+        Bill, Payment.bill_id == Bill.id
+    ).filter(
+        Bill.restaurant_id == target_id,
         Payment.status == PaymentRecordStatus.SUCCESS
     ).scalar()
     total_revenue = round(float(total_rev_result), 2)
 
-    # 2. Total Orders
-    total_orders = db.query(Order).count()
+    # 2. Total Orders for THIS restaurant
+    total_orders = db.query(Order).filter(Order.restaurant_id == target_id).count()
 
-    # 3. Tables & Occupancy
-    total_tables = db.query(Table).filter(Table.is_active == True).count()
+    # 3. Tables & Occupancy for THIS restaurant
+    total_tables = db.query(Table).filter(Table.restaurant_id == target_id, Table.is_active == True).count()
     active_tables = db.query(Table).filter(
+        Table.restaurant_id == target_id,
         Table.is_active == True,
         Table.status != TableStatus.AVAILABLE
     ).count()
     occupancy_rate = round((active_tables / max(1, total_tables)) * 100.0, 1)
 
     # 4. Total Customers
-    guest_count_sum = db.query(func.coalesce(func.sum(TableSession.guest_count), 0)).scalar()
+    guest_count_sum = db.query(func.coalesce(func.sum(TableSession.guest_count), 0)).join(
+        Table, TableSession.table_id == Table.id
+    ).filter(
+        Table.restaurant_id == target_id
+    ).scalar()
     total_customers = int(guest_count_sum) if guest_count_sum > 0 else (total_orders * 2)
 
     # 5. Average Order Value (AOV)
@@ -43,11 +69,15 @@ def get_analytics_overview(db: Session = Depends(get_db)):
 
     # 6. Pending Orders
     pending_orders = db.query(Order).filter(
+        Order.restaurant_id == target_id,
         Order.status.in_([OrderStatus.PLACED, OrderStatus.ACCEPTED, OrderStatus.PREPARING])
     ).count()
 
     # 7. Average Preparation Time
-    avg_prep = db.query(func.avg(Order.actual_prep_time)).filter(Order.actual_prep_time.isnot(None)).scalar()
+    avg_prep = db.query(func.avg(Order.actual_prep_time)).filter(
+        Order.restaurant_id == target_id,
+        Order.actual_prep_time.isnot(None)
+    ).scalar()
     avg_prep_time = round(float(avg_prep), 1) if avg_prep else 18.0
 
     kpis = DashboardKPIs(
@@ -71,6 +101,7 @@ def get_analytics_overview(db: Session = Depends(get_db)):
         func.coalesce(func.sum(Order.total_amount), 0.0).label("daily_rev"),
         func.count(Order.id).label("daily_orders")
     ).filter(
+        Order.restaurant_id == target_id,
         Order.created_at >= seven_days_ago
     ).group_by(func.date(Order.created_at)).order_by(func.date(Order.created_at).asc()).all()
 
@@ -100,6 +131,10 @@ def get_analytics_overview(db: Session = Depends(get_db)):
         MenuItem, MenuItem.category_id == MenuCategory.id
     ).join(
         OrderItem, OrderItem.menu_item_id == MenuItem.id
+    ).join(
+        Order, OrderItem.order_id == Order.id
+    ).filter(
+        Order.restaurant_id == target_id
     ).group_by(MenuCategory.name).all()
 
     tot_cat_rev = sum(float(r.cat_rev) for r in category_sales_raw) or 1.0
@@ -115,7 +150,7 @@ def get_analytics_overview(db: Session = Depends(get_db)):
 
     # Fallback if no order items yet
     if not category_sales:
-        categories = db.query(MenuCategory).all()
+        categories = db.query(MenuCategory).filter(MenuCategory.restaurant_id == target_id).all()
         for c in categories:
             category_sales.append(CategorySalesPoint(
                 category_name=c.name,
@@ -129,6 +164,10 @@ def get_analytics_overview(db: Session = Depends(get_db)):
         OrderItem.item_name,
         func.coalesce(func.sum(OrderItem.quantity), 0).label("qty"),
         func.coalesce(func.sum(OrderItem.total_price), 0.0).label("rev")
+    ).join(
+        Order, OrderItem.order_id == Order.id
+    ).filter(
+        Order.restaurant_id == target_id
     ).group_by(OrderItem.item_name).order_by(desc("qty")).limit(5).all()
 
     top_selling_dishes = [
@@ -146,6 +185,10 @@ def get_analytics_overview(db: Session = Depends(get_db)):
         OrderItem.item_name,
         func.coalesce(func.sum(OrderItem.quantity), 0).label("qty"),
         func.coalesce(func.sum(OrderItem.total_price), 0.0).label("rev")
+    ).join(
+        Order, OrderItem.order_id == Order.id
+    ).filter(
+        Order.restaurant_id == target_id
     ).group_by(OrderItem.item_name).order_by(asc("qty")).limit(5).all()
 
     least_selling_dishes = [
@@ -180,4 +223,3 @@ def get_analytics_overview(db: Session = Depends(get_db)):
         least_selling_dishes=least_selling_dishes,
         peak_hours=peak_hours
     )
-

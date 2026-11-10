@@ -50,6 +50,7 @@ class Order(Base):
 
     table = relationship("Table", back_populates="orders")
     session = relationship("TableSession", back_populates="orders")
+    restaurant = relationship("Restaurant", back_populates="orders")
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     status_history = relationship("OrderStatusHistory", back_populates="order", cascade="all, delete-orphan")
     bill = relationship("Bill", back_populates="order", uselist=False)

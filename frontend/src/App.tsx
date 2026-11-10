@@ -33,8 +33,10 @@ import { ReservationsAdminPage } from './pages/admin/ReservationsAdminPage';
 import { BillingAdminPage } from './pages/admin/BillingAdminPage';
 import { RestaurantSettingsPage } from './pages/admin/RestaurantSettingsPage';
 
-// Auth Pages
+// Auth & Platform Pages
 import { LoginPage } from './pages/auth/LoginPage';
+import { OnboardingPage } from './pages/auth/OnboardingPage';
+import { PlatformAdminPage } from './pages/platform/PlatformAdminPage';
 
 export function App() {
   return (
@@ -45,6 +47,29 @@ export function App() {
             <Routes>
               {/* Home redirect */}
               <Route path="/" element={<Navigate to="/menu" replace />} />
+
+              {/* SaaS Platform Super Admin & Tenant Onboarding */}
+              <Route path="/platform" element={<PlatformAdminPage />} />
+              <Route path="/onboard" element={<OnboardingPage />} />
+
+              {/* Multi-Tenant Scoped Customer Routes */}
+              <Route path="/:tenantSlug/table/:qrToken" element={<CustomerLayout />}>
+                <Route index element={<MenuPage />} />
+                <Route path="cart" element={<CartPage />} />
+                <Route path="track/:orderId" element={<OrderTrackingPage />} />
+                <Route path="wifi" element={<WifiPage />} />
+                <Route path="split-bill" element={<SplitBillPage />} />
+                <Route path="reserve" element={<ReservationPage />} />
+              </Route>
+
+              <Route path="/:tenantSlug/menu" element={<CustomerLayout />}>
+                <Route index element={<MenuPage />} />
+                <Route path="cart" element={<CartPage />} />
+                <Route path="track/:orderId" element={<OrderTrackingPage />} />
+                <Route path="wifi" element={<WifiPage />} />
+                <Route path="split-bill" element={<SplitBillPage />} />
+                <Route path="reserve" element={<ReservationPage />} />
+              </Route>
 
               {/* Customer QR Routes */}
               <Route path="/table/:qrToken" element={<CustomerLayout />}>

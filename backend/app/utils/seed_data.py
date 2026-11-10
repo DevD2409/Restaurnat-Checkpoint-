@@ -21,13 +21,56 @@ def seed_database():
         # Check if restaurant already exists
         existing_restaurant = db.query(Restaurant).first()
         if existing_restaurant:
-            print("Database already seeded. Skipping initial seed.")
+            changed = False
+            if not existing_restaurant.slug:
+                existing_restaurant.slug = "royal-saffron"
+                changed = True
+            if not existing_restaurant.subscription_plan:
+                existing_restaurant.subscription_plan = "ENTERPRISE"
+                changed = True
+            if not existing_restaurant.subscription_status:
+                existing_restaurant.subscription_status = "ACTIVE"
+                changed = True
+
+            # Ensure superadmin user exists
+            superadmin = db.query(User).filter(User.username == "superadmin").first()
+            if not superadmin:
+                superadmin = User(
+                    restaurant_id=None,
+                    email="superadmin@srmp-saas.com",
+                    username="superadmin",
+                    hashed_password=get_password_hash("superadmin123"),
+                    full_name="Platform Super Administrator",
+                    role=UserRole.PLATFORM_SUPER_ADMIN,
+                    phone_number="+91 99999 00000",
+                    is_active=True
+                )
+                db.add(superadmin)
+                changed = True
+
+            # Ensure admin has owner_id linked
+            admin_user = db.query(User).filter(User.username == "admin").first()
+            if admin_user and existing_restaurant.owner_id is None:
+                existing_restaurant.owner_id = admin_user.id
+                changed = True
+
+            # Backfill restaurant_id on menu items if missing
+            db.query(MenuItem).filter((MenuItem.restaurant_id == None) | (MenuItem.restaurant_id == 0)).update(
+                {"restaurant_id": existing_restaurant.id}, synchronize_session=False
+            )
+            changed = True
+
+            if changed:
+                db.commit()
+
+            print("Database already seeded. Multi-tenant SaaS properties synchronized.")
             return
 
         print("Seeding database with realistic restaurant data...")
 
         # 1. Restaurant Profile
         restaurant = Restaurant(
+            slug="royal-saffron",
             name="The Royal Saffron - Smart Bistro & Lounge",
             tagline="Contemporary Indian Cuisine & Artisanal Mixology",
             address="Plot 42, Galleria Boulevard, Cyber Hub, Gurugram, India",
@@ -41,6 +84,8 @@ def seed_database():
             wifi_ssid="RoyalSaffron-Guest-HighSpeed",
             wifi_password="SaffronDining2026",
             wifi_instructions="Connect to 'RoyalSaffron-Guest-HighSpeed'. Open your browser to access the captive high-speed internet portal. Complimentary for guests.",
+            subscription_plan="ENTERPRISE",
+            subscription_status="ACTIVE",
             opening_time="11:30 AM",
             closing_time="11:30 PM",
             is_active=True
@@ -51,6 +96,16 @@ def seed_database():
 
         # 2. Staff & Admin Users
         users = [
+            User(
+                restaurant_id=None,
+                email="superadmin@srmp-saas.com",
+                username="superadmin",
+                hashed_password=get_password_hash("superadmin123"),
+                full_name="Platform Super Administrator",
+                role=UserRole.PLATFORM_SUPER_ADMIN,
+                phone_number="+91 99999 00000",
+                is_active=True
+            ),
             User(
                 restaurant_id=restaurant.id,
                 email="admin@royalsaffron.com",
@@ -466,6 +521,7 @@ def seed_database():
         for item_info in items_data:
             cat = created_categories[item_info["cat_idx"]]
             menu_item = MenuItem(
+                restaurant_id=restaurant.id,
                 category_id=cat.id,
                 name=item_info["name"],
                 description=item_info["desc"],

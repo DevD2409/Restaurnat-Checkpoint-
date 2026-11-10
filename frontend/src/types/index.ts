@@ -1,18 +1,30 @@
-export type UserRole = 'ADMIN' | 'MANAGER' | 'WAITER' | 'KITCHEN' | 'CASHIER';
+export type UserRole =
+  | 'PLATFORM_SUPER_ADMIN'
+  | 'RESTAURANT_OWNER'
+  | 'RESTAURANT_MANAGER'
+  | 'ADMIN'
+  | 'MANAGER'
+  | 'WAITER'
+  | 'KITCHEN'
+  | 'CASHIER'
+  | 'CUSTOMER';
 
 export interface User {
   id: number;
-  restaurant_id: number;
+  restaurant_id?: number | null;
+  restaurant_slug?: string;
   email: string;
   username: string;
   full_name: string;
   role: UserRole;
   phone_number?: string;
+  shift?: string;
   is_active: boolean;
 }
 
 export interface Restaurant {
   id: number;
+  slug?: string;
   name: string;
   tagline?: string;
   address?: string;
@@ -23,12 +35,86 @@ export interface Restaurant {
   service_charge_percentage: number;
   currency: string;
   currency_symbol: string;
+  timezone?: string;
+  logo_url?: string;
+  cover_image_url?: string;
+  primary_color?: string;
+  secondary_color?: string;
+  facilities?: string;
+  service_types?: string;
+  razorpay_key_id?: string;
+  razorpay_key_secret_enc?: string;
+  subscription_plan?: string;
+  subscription_status?: string;
+  owner_id?: number;
   wifi_ssid?: string;
   wifi_password?: string;
   wifi_instructions?: string;
   opening_time?: string;
   closing_time?: string;
   is_active: boolean;
+}
+
+export interface RestaurantPublicProfile {
+  id: number;
+  slug: string;
+  name: string;
+  tagline?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  tax_percentage: number;
+  service_charge_percentage: number;
+  currency: string;
+  currency_symbol: string;
+  logo_url?: string;
+  cover_image_url?: string;
+  primary_color: string;
+  facilities?: string;
+  service_types?: string;
+  wifi_ssid?: string;
+  opening_time?: string;
+  closing_time?: string;
+}
+
+export interface Feedback {
+  id: number;
+  restaurant_id: number;
+  customer_name: string;
+  overall_rating: number;
+  rating?: number;
+  food_rating?: number;
+  service_rating?: number;
+  ambience_rating?: number;
+  cleanliness_rating?: number;
+  comment?: string;
+  created_at: string;
+}
+
+export interface PlatformStats {
+  total_tenants: number;
+  total_restaurants: number;
+  active_tenants: number;
+  total_platform_orders: number;
+  total_platform_revenue: number;
+  total_registered_users: number;
+  subscription_plans?: Record<string, number>;
+  subscription_breakdown?: Record<string, number>;
+}
+
+export interface PlatformTenant {
+  id: number;
+  name: string;
+  slug: string;
+  subscription_plan: string;
+  subscription_status: string;
+  is_active: boolean;
+  owner_username?: string;
+  owner_email?: string;
+  total_orders: number;
+  total_tables: number;
+  total_revenue: number;
+  created_at?: string;
 }
 
 export type TableStatus =

@@ -1,9 +1,10 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import require_roles
+from app.core.dependencies import require_roles, oauth2_scheme
+from app.core.security import decode_access_token
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, OrderStatusHistory, OrderStatus
 from app.websocket.connection_manager import manager
@@ -11,11 +12,31 @@ from app.websocket.connection_manager import manager
 router = APIRouter(prefix="/kitchen", tags=["Kitchen Display System (KDS)"])
 
 @router.get("/active")
-def get_kitchen_active_orders(db: Session = Depends(get_db)):
+def get_kitchen_active_orders(
+    restaurant_id: Optional[int] = Query(None),
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns live orders in kitchen pipeline strictly isolated to the authenticated restaurant tenant.
+    Prevents cross-restaurant kitchen queue leakage.
+    """
+    target_id = restaurant_id
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user:
+                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
+                    target_id = user.restaurant_id
+    if target_id is None:
+        target_id = 1
+
     orders = db.query(Order).options(
         joinedload(Order.items),
         joinedload(Order.table)
     ).filter(
+        Order.restaurant_id == target_id,
         Order.status.in_([
             OrderStatus.PLACED,
             OrderStatus.ACCEPTED,
@@ -41,6 +62,7 @@ def get_kitchen_active_orders(db: Session = Depends(get_db)):
         order_data = {
             "id": o.id,
             "order_number": o.order_number,
+            "restaurant_id": o.restaurant_id,
             "table_id": o.table_id,
             "table_number": o.table.table_number if o.table else "Unknown",
             "customer_name": o.customer_name,
@@ -54,19 +76,19 @@ def get_kitchen_active_orders(db: Session = Depends(get_db)):
             "items": [
                 {
                     "id": item.id,
-                    "name": item.item_name,
+                    "item_name": item.item_name,
                     "quantity": item.quantity,
-                    "customizations_json": item.customizations_json,
                     "special_instructions": item.special_instructions,
-                    "status": item.status
+                    "status": item.status,
+                    "customizations_json": item.customizations_json
                 }
                 for item in o.items
             ]
         }
 
-        if o.status == OrderStatus.PLACED:
+        if o.status in [OrderStatus.PLACED, OrderStatus.ACCEPTED]:
             new_orders.append(order_data)
-        elif o.status in [OrderStatus.ACCEPTED, OrderStatus.PREPARING]:
+        elif o.status == OrderStatus.PREPARING:
             preparing.append(order_data)
         elif o.status == OrderStatus.READY:
             ready.append(order_data)
@@ -74,12 +96,29 @@ def get_kitchen_active_orders(db: Session = Depends(get_db)):
             completed.append(order_data)
 
     return {
+        "restaurant_id": target_id,
         "new_orders": new_orders,
         "preparing": preparing,
         "ready": ready,
         "completed": completed,
-        "total_active": len(new_orders) + len(preparing) + len(ready)
+        "total_active": len(orders),
+        "delayed_count": sum(1 for o in orders if int((now - (o.created_at if o.created_at.tzinfo else o.created_at.replace(tzinfo=timezone.utc))).total_seconds() / 60) > o.estimated_prep_time)
     }
+
+@router.patch("/item/{item_id}/status")
+async def update_kitchen_item_status(
+    item_id: int,
+    status_str: str = Query(..., description="QUEUED, COOKING, READY"),
+    db: Session = Depends(get_db)
+):
+    item = db.query(OrderItem).filter(OrderItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Order item not found")
+
+    item.status = status_str
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "status": item.status}
 
 @router.post("/update-status")
 async def kitchen_update_status(
@@ -122,17 +161,20 @@ async def kitchen_update_status(
 
     db.commit()
 
-    await manager.broadcast_event(
+    await manager.broadcast_tenant_event(
+        order.restaurant_id,
         "ORDER_STATUS_CHANGED",
         {
             "order_id": order.id,
             "order_number": order.order_number,
+            "restaurant_id": order.restaurant_id,
             "table_id": order.table_id,
             "table_number": order.table.table_number if order.table else "",
             "previous_status": old_status.value,
             "new_status": new_status.value,
             "notes": f"Kitchen update by {chef_name}"
         },
+        channel="kitchen",
         table_id=order.table_id
     )
 

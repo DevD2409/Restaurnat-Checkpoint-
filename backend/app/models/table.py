@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, UniqueConstraint, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -16,10 +16,11 @@ class Table(Base):
     __tablename__ = "tables"
 
     id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), default=1, index=True)
-    table_number = Column(String(50), nullable=False, unique=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), default=1, index=True, nullable=False)
+    table_number = Column(String(50), nullable=False, index=True)
+    service_type = Column(String(50), default="TABLE")  # TABLE, ROOM, POOL_BAR, CABANA, BANQUET
     capacity = Column(Integer, default=4, nullable=False)
-    section = Column(String(50), default="Main Dining")  # Terrace, Bar, VIP Lounge, Main Dining
+    section = Column(String(50), default="Main Dining")  # Terrace, Bar, VIP Lounge, Main Dining, Suite, Poolside
     status = Column(SQLEnum(TableStatus), default=TableStatus.AVAILABLE, nullable=False)
     qr_token = Column(String(255), unique=True, nullable=True)
     pos_x = Column(Integer, default=100)  # for interactive floor map positioning
@@ -29,6 +30,11 @@ class Table(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    __table_args__ = (
+        UniqueConstraint("restaurant_id", "table_number", name="uq_restaurant_table_number"),
+    )
+
+    restaurant = relationship("Restaurant", back_populates="tables")
     sessions = relationship("TableSession", back_populates="table", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="table")
     service_requests = relationship("ServiceRequest", back_populates="table")
@@ -48,4 +54,3 @@ class TableSession(Base):
 
     table = relationship("Table", back_populates="sessions")
     orders = relationship("Order", back_populates="session")
-

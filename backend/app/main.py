@@ -20,6 +20,9 @@ from app.routers.reservations import router as reservations_router
 from app.routers.billing import router as billing_router
 from app.routers.payments import router as payments_router
 from app.routers.analytics import router as analytics_router
+from app.routers.onboarding import router as onboarding_router
+from app.routers.super_admin import router as super_admin_router
+from app.routers.feedback import router as feedback_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,7 +38,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="Unified API backend powering Customer App, Kitchen Display System (KDS), Staff Portal, and Restaurant Administration Dashboard.",
+    description="Multi-Tenant Hospitality SaaS Platform powering Customer Dining, KDS, Staff Management, and Super Admin Administration.",
     lifespan=lifespan
 )
 
@@ -60,21 +63,63 @@ app.include_router(reservations_router, prefix=settings.API_V1_STR)
 app.include_router(billing_router, prefix=settings.API_V1_STR)
 app.include_router(payments_router, prefix=settings.API_V1_STR)
 app.include_router(analytics_router, prefix=settings.API_V1_STR)
+app.include_router(onboarding_router, prefix=settings.API_V1_STR)
+app.include_router(super_admin_router, prefix=settings.API_V1_STR)
+app.include_router(feedback_router, prefix=settings.API_V1_STR)
 
 @app.get("/health")
 def health_check():
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
-        "version": settings.VERSION
+        "version": settings.VERSION,
+        "architecture": "Multi-Tenant Hospitality SaaS"
     }
 
-# WebSockets
+# WebSockets Privileged Access Matrix
 PRIVILEGED_CHANNELS = {
-    "admin": ["ADMIN", "MANAGER"],
-    "kitchen": ["ADMIN", "MANAGER", "KITCHEN", "CHEF"],
-    "staff": ["ADMIN", "MANAGER", "WAITER", "CASHIER"]
+    "admin": ["PLATFORM_SUPER_ADMIN", "RESTAURANT_OWNER", "ADMIN", "RESTAURANT_MANAGER", "MANAGER"],
+    "kitchen": ["PLATFORM_SUPER_ADMIN", "RESTAURANT_OWNER", "ADMIN", "RESTAURANT_MANAGER", "MANAGER", "KITCHEN", "CHEF"],
+    "staff": ["PLATFORM_SUPER_ADMIN", "RESTAURANT_OWNER", "ADMIN", "RESTAURANT_MANAGER", "MANAGER", "WAITER", "CASHIER"]
 }
+
+@app.websocket("/ws/tenant/{tenant_id}/{channel}")
+async def websocket_tenant_channel_endpoint(
+    websocket: WebSocket,
+    tenant_id: int,
+    channel: str,
+    token: Optional[str] = Query(None)
+):
+    """Multi-tenant isolated WebSocket channel with cryptographic membership enforcement."""
+    if channel in PRIVILEGED_CHANNELS:
+        allowed_roles = PRIVILEGED_CHANNELS[channel]
+        if not token:
+            await websocket.close(code=1008)
+            return
+        payload = decode_access_token(token)
+        if not payload:
+            await websocket.close(code=1008)
+            return
+        user_role = payload.get("role")
+        user_tenant = payload.get("restaurant_id")
+        
+        # Verify role and strict tenant isolation (Platform super admins can subscribe anywhere)
+        if user_role not in allowed_roles:
+            await websocket.close(code=1008)
+            return
+        if user_role != "PLATFORM_SUPER_ADMIN" and user_tenant != tenant_id:
+            await websocket.close(code=1008)  # Reject cross-tenant eavesdropping
+            return
+
+    await manager.connect(websocket, channel=channel, restaurant_id=tenant_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f'{{"type": "PONG", "tenant_id": {tenant_id}, "channel": "{channel}"}}')
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, channel=channel, restaurant_id=tenant_id)
+    except Exception:
+        manager.disconnect(websocket, channel=channel, restaurant_id=tenant_id)
 
 @app.websocket("/ws/{channel}")
 async def websocket_channel_endpoint(
@@ -82,41 +127,40 @@ async def websocket_channel_endpoint(
     channel: str,
     token: Optional[str] = Query(None)
 ):
+    """Backward-compatible global channel endpoint."""
     if channel in PRIVILEGED_CHANNELS:
         allowed_roles = PRIVILEGED_CHANNELS[channel]
         if token:
             payload = decode_access_token(token)
             if not payload or payload.get("role") not in allowed_roles:
-                await websocket.close(code=1008)  # Policy violation
+                await websocket.close(code=1008)
                 return
         elif settings.ENVIRONMENT == "production":
-            await websocket.close(code=1008)  # Policy violation
+            await websocket.close(code=1008)
             return
 
-    await manager.connect(websocket, channel=channel)
+    await manager.connect(websocket, channel=channel, restaurant_id=1)
     try:
         while True:
             data = await websocket.receive_text()
-            # Can handle incoming client messages or pings
             await websocket.send_text(f'{{"type": "PONG", "channel": "{channel}"}}')
     except WebSocketDisconnect:
-        manager.disconnect(websocket, channel=channel)
+        manager.disconnect(websocket, channel=channel, restaurant_id=1)
     except Exception:
-        manager.disconnect(websocket, channel=channel)
+        manager.disconnect(websocket, channel=channel, restaurant_id=1)
 
 @app.websocket("/ws/table/{table_id}")
 async def websocket_table_endpoint(websocket: WebSocket, table_id: int):
-    await manager.connect(websocket, table_id=table_id)
+    await manager.connect(websocket, table_id=table_id, restaurant_id=1)
     try:
         while True:
             data = await websocket.receive_text()
             await websocket.send_text(f'{{"type": "PONG", "table_id": {table_id}}}')
     except WebSocketDisconnect:
-        manager.disconnect(websocket, table_id=table_id)
+        manager.disconnect(websocket, table_id=table_id, restaurant_id=1)
     except Exception:
-        manager.disconnect(websocket, table_id=table_id)
+        manager.disconnect(websocket, table_id=table_id, restaurant_id=1)
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
-

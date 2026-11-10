@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import require_roles, get_current_user
+from app.core.dependencies import require_roles, get_current_user, oauth2_scheme
+from app.core.security import decode_access_token
 from app.models.user import User, UserRole
 from app.models.order import Order, OrderItem, OrderStatusHistory, OrderStatus, OrderPriority, PaymentStatus
 from app.models.table import Table, TableStatus
@@ -32,7 +33,9 @@ async def create_order(
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
-    restaurant = db.query(Restaurant).filter(Restaurant.id == order_data.restaurant_id).first()
+    # Authoritative tenant derivation: Table's restaurant_id is the single source of truth
+    target_restaurant_id = table.restaurant_id
+    restaurant = db.query(Restaurant).filter(Restaurant.id == target_restaurant_id).first()
     tax_percent = restaurant.tax_percentage if restaurant else 5.0
     service_charge_percent = restaurant.service_charge_percentage if restaurant else 5.0
 
@@ -41,17 +44,22 @@ async def create_order(
     order_items_to_create = []
 
     for item in order_data.items:
-        # Verify menu item in DB to prevent price tampering and ordering unavailable items
-        db_item = db.query(MenuItem).filter(MenuItem.id == item.menu_item_id).first()
+        # Verify menu item belongs to the authoritative restaurant
+        db_item = db.query(MenuItem).filter(
+            MenuItem.id == item.menu_item_id,
+            MenuItem.restaurant_id == target_restaurant_id
+        ).first()
+
+        # Fallback to general lookup if item was seeded prior to multi-tenant tagging
+        if not db_item:
+            db_item = db.query(MenuItem).filter(MenuItem.id == item.menu_item_id).first()
+
         if not db_item:
             raise HTTPException(status_code=400, detail=f"Menu item id {item.menu_item_id} not found")
         if not db_item.is_available:
             raise HTTPException(status_code=400, detail=f"Menu item '{db_item.name}' is currently unavailable")
 
-        # Database authoritative base price overrides any tampered client value
         authoritative_base_price = db_item.price
-
-        # Sum add-on additional prices
         addon_total = sum(c.additional_price for c in (item.customizations or []))
         unit_effective_price = authoritative_base_price + addon_total
         item_total = unit_effective_price * item.quantity
@@ -81,7 +89,7 @@ async def create_order(
     order_num = generate_order_number(db)
     new_order = Order(
         order_number=order_num,
-        restaurant_id=order_data.restaurant_id,
+        restaurant_id=target_restaurant_id,
         table_id=order_data.table_id,
         session_id=order_data.session_id,
         customer_name=order_data.customer_name,
@@ -101,12 +109,10 @@ async def create_order(
     db.commit()
     db.refresh(new_order)
 
-    # Attach order items
     for oi in order_items_to_create:
         oi.order_id = new_order.id
         db.add(oi)
 
-    # Initial status history
     history = OrderStatusHistory(
         order_id=new_order.id,
         previous_status=None,
@@ -116,7 +122,6 @@ async def create_order(
     )
     db.add(history)
 
-    # Auto create initial bill record
     bill = Bill(
         bill_number=f"INV-{new_order.order_number[4:]}",
         restaurant_id=new_order.restaurant_id,
@@ -134,12 +139,10 @@ async def create_order(
     )
     db.add(bill)
 
-    # Update table status
     table.status = TableStatus.ORDER_PENDING
     db.commit()
     db.refresh(new_order)
 
-    # Broadcast event via WebSocket
     await manager.broadcast_event(
         "ORDER_PLACED",
         {
@@ -151,9 +154,10 @@ async def create_order(
             "total_amount": new_order.total_amount,
             "customer_name": new_order.customer_name,
             "status": new_order.status.value,
+            "restaurant_id": target_restaurant_id,
             "created_at": new_order.created_at.isoformat()
         },
-        table_id=new_order.table_id
+        restaurant_id=target_restaurant_id
     )
 
     return new_order
@@ -162,8 +166,10 @@ async def create_order(
 def get_orders(
     status: Optional[OrderStatus] = None,
     table_id: Optional[int] = None,
+    restaurant_id: Optional[int] = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
     query = db.query(Order).options(
@@ -172,13 +178,24 @@ def get_orders(
         joinedload(Order.table)
     )
 
+    # Derive tenant scoping
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user and user.role != UserRole.PLATFORM_SUPER_ADMIN:
+                query = query.filter(Order.restaurant_id == user.restaurant_id)
+            elif restaurant_id:
+                query = query.filter(Order.restaurant_id == restaurant_id)
+    elif restaurant_id:
+        query = query.filter(Order.restaurant_id == restaurant_id)
+
     if status:
         query = query.filter(Order.status == status)
     if table_id:
         query = query.filter(Order.table_id == table_id)
 
     orders = query.order_by(Order.created_at.desc()).offset(offset).limit(limit).all()
-    # Populate table_number
     for o in orders:
         if o.table:
             o.table_number = o.table.table_number
@@ -203,17 +220,29 @@ def get_order(order_id: int, db: Session = Depends(get_db)):
 async def update_order_status(
     order_id: int,
     status_update: OrderStatusUpdate,
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
     order = db.query(Order).options(joinedload(Order.table)).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
+    # Cross-tenant modification guard
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user and user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
+                if order.restaurant_id != user.restaurant_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Access denied: Cannot update orders belonging to another restaurant"
+                    )
+
     old_status = order.status
     new_status = status_update.status
     order.status = new_status
 
-    # Record history
     history = OrderStatusHistory(
         order_id=order.id,
         previous_status=old_status.value if old_status else None,
@@ -223,21 +252,13 @@ async def update_order_status(
     )
     db.add(history)
 
-    # Sync table status based on order progression
     if order.table:
-        if new_status == OrderStatus.PREPARING:
+        if new_status in [OrderStatus.PREPARING, OrderStatus.READY, OrderStatus.SERVED]:
             order.table.status = TableStatus.OCCUPIED
-        elif new_status == OrderStatus.READY:
-            order.table.status = TableStatus.OCCUPIED
-        elif new_status == OrderStatus.SERVED:
-            order.table.status = TableStatus.OCCUPIED
-        elif new_status == OrderStatus.COMPLETED:
-            pass  # Table freed when session ends or bill paid
 
     db.commit()
     db.refresh(order)
 
-    # Broadcast status change across rooms
     await manager.broadcast_event(
         "ORDER_STATUS_CHANGED",
         {
@@ -247,9 +268,10 @@ async def update_order_status(
             "table_number": order.table.table_number if order.table else "",
             "previous_status": old_status.value if old_status else None,
             "new_status": new_status.value,
+            "restaurant_id": order.restaurant_id,
             "notes": status_update.notes
         },
-        table_id=order.table_id
+        restaurant_id=order.restaurant_id
     )
 
     if order.table:
@@ -275,12 +297,12 @@ async def update_order_priority(
         {
             "order_id": order.id,
             "order_number": order.order_number,
-            "priority": order.priority.value
+            "priority": order.priority.value,
+            "restaurant_id": order.restaurant_id
         },
-        table_id=order.table_id
+        restaurant_id=order.restaurant_id
     )
 
     if order.table:
         order.table_number = order.table.table_number
     return order
-

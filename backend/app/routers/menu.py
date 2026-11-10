@@ -2,8 +2,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import require_roles
+from app.core.dependencies import require_roles, get_current_user
 from app.models.user import User, UserRole
+from app.models.restaurant import Restaurant
 from app.models.menu import MenuCategory, MenuItem, MenuCustomizationGroup, MenuCustomizationOption
 from app.schemas.menu import (
     MenuCategoryCreate, MenuCategoryUpdate, MenuCategoryResponse,
@@ -12,20 +13,45 @@ from app.schemas.menu import (
 
 router = APIRouter(prefix="/menu", tags=["Menu Management"])
 
+MENU_MANAGERS = [
+    UserRole.PLATFORM_SUPER_ADMIN,
+    UserRole.RESTAURANT_OWNER,
+    UserRole.ADMIN,
+    UserRole.RESTAURANT_MANAGER,
+    UserRole.MANAGER
+]
+
 @router.get("/categories", response_model=List[MenuCategoryResponse])
 def get_categories(
+    restaurant_id: Optional[int] = Query(None),
+    slug: Optional[str] = Query(None),
     include_inactive: bool = False,
     db: Session = Depends(get_db)
 ):
+    """
+    Returns menu categories and dishes for a specific restaurant tenant.
+    Enforces tenant isolation by resolving restaurant_id or slug.
+    """
+    target_id = restaurant_id
+    if slug:
+        r = db.query(Restaurant).filter(Restaurant.slug == slug).first()
+        if r:
+            target_id = r.id
+    
     query = db.query(MenuCategory).options(
         joinedload(MenuCategory.items).joinedload(MenuItem.customization_groups).joinedload(MenuCustomizationGroup.options)
     ).order_by(MenuCategory.display_order.asc())
+
+    if target_id is not None:
+        query = query.filter(MenuCategory.restaurant_id == target_id)
+    else:
+        # Default fallback to primary tenant
+        query = query.filter(MenuCategory.restaurant_id == 1)
 
     if not include_inactive:
         query = query.filter(MenuCategory.is_active == True)
 
     categories = query.all()
-    # Filter inactive items if include_inactive is false
     if not include_inactive:
         for cat in categories:
             cat.items = [item for item in cat.items if item.is_available]
@@ -35,10 +61,16 @@ def get_categories(
 def create_category(
     cat_data: MenuCategoryCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+    current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
+    target_restaurant_id = current_user.restaurant_id
+    if current_user.role == UserRole.PLATFORM_SUPER_ADMIN and cat_data.restaurant_id:
+        target_restaurant_id = cat_data.restaurant_id
+    if not target_restaurant_id:
+        target_restaurant_id = 1
+
     cat = MenuCategory(
-        restaurant_id=cat_data.restaurant_id,
+        restaurant_id=target_restaurant_id,
         name=cat_data.name,
         description=cat_data.description,
         icon=cat_data.icon,
@@ -55,11 +87,17 @@ def update_category(
     cat_id: int,
     cat_data: MenuCategoryUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+    current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
     cat = db.query(MenuCategory).filter(MenuCategory.id == cat_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and cat.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot modify category of another restaurant"
+        )
 
     update_dict = cat_data.model_dump(exclude_unset=True)
     for k, v in update_dict.items():
@@ -73,17 +111,25 @@ def update_category(
 def delete_category(
     cat_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN]))
+    current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
     cat = db.query(MenuCategory).filter(MenuCategory.id == cat_id).first()
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and cat.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot delete category of another restaurant"
+        )
+
     db.delete(cat)
     db.commit()
     return {"message": "Category deleted successfully"}
 
 @router.get("/items", response_model=List[MenuItemResponse])
 def get_items(
+    restaurant_id: Optional[int] = None,
     category_id: Optional[int] = None,
     is_veg: Optional[bool] = None,
     search: Optional[str] = None,
@@ -94,6 +140,8 @@ def get_items(
         joinedload(MenuItem.customization_groups).joinedload(MenuCustomizationGroup.options)
     )
 
+    if restaurant_id:
+        query = query.filter(MenuItem.restaurant_id == restaurant_id)
     if category_id:
         query = query.filter(MenuItem.category_id == category_id)
     if is_veg is not None:
@@ -121,13 +169,20 @@ def get_item(item_id: int, db: Session = Depends(get_db)):
 def create_menu_item(
     item_data: MenuItemCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+    current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
     category = db.query(MenuCategory).filter(MenuCategory.id == item_data.category_id).first()
     if not category:
         raise HTTPException(status_code=400, detail="Invalid category_id")
 
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and category.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot add items to another restaurant's category"
+        )
+
     new_item = MenuItem(
+        restaurant_id=category.restaurant_id,
         category_id=item_data.category_id,
         name=item_data.name,
         description=item_data.description,
@@ -145,7 +200,6 @@ def create_menu_item(
     db.commit()
     db.refresh(new_item)
 
-    # Add customizations if provided
     if item_data.customization_groups:
         for grp in item_data.customization_groups:
             cgroup = MenuCustomizationGroup(
@@ -163,7 +217,7 @@ def create_menu_item(
                 copt = MenuCustomizationOption(
                     group_id=cgroup.id,
                     name=opt.name,
-                    additional_price=opt.additional_price,
+                    extra_price=opt.extra_price if hasattr(opt, 'extra_price') else getattr(opt, 'additional_price', 0.0),
                     is_default=opt.is_default
                 )
                 db.add(copt)
@@ -177,11 +231,17 @@ def update_menu_item(
     item_id: int,
     item_update: MenuItemUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+    current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
     item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and item.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot update items of another restaurant"
+        )
 
     update_dict = item_update.model_dump(exclude_unset=True)
     for k, v in update_dict.items():
@@ -195,11 +255,24 @@ def update_menu_item(
 def toggle_item_availability(
     item_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER, UserRole.KITCHEN]))
+    current_user: User = Depends(require_roles([
+        UserRole.PLATFORM_SUPER_ADMIN,
+        UserRole.RESTAURANT_OWNER,
+        UserRole.ADMIN,
+        UserRole.RESTAURANT_MANAGER,
+        UserRole.MANAGER,
+        UserRole.KITCHEN
+    ]))
 ):
     item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and item.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot toggle availability for another restaurant's item"
+        )
 
     item.is_available = not item.is_available
     db.commit()
@@ -209,12 +282,18 @@ def toggle_item_availability(
 def delete_menu_item(
     item_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+    current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
     item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and item.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot delete item from another restaurant"
+        )
+
     db.delete(item)
     db.commit()
     return {"message": "Menu item deleted successfully"}
-
