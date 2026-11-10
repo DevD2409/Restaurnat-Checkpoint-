@@ -168,3 +168,4 @@ Before switching any environment from `test` to `live`:
 - [ ] Test a live ₹1.00 transaction on a real restaurant table QR and verify settlement in the restaurant's bank account.
 - [ ] Test a live ₹1.00 SaaS subscription checkout and verify settlement in the platform's corporate bank account.
 - [ ] Confirm no secrets or keys are committed to Git.
+

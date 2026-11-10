@@ -416,9 +416,13 @@ export interface SubscriptionPlan {
   plan_code: string;
   name: string;
   billing_cycle: string;
-  price: number;
+  price_paise: number;
+  price_inr: number;
+  price?: number; // fallback
   currency: string;
+  duration_days: number;
   features?: string;
+  entitlements?: Record<string, any>;
   max_tables: number;
   is_active: boolean;
 }
@@ -427,7 +431,9 @@ export interface SubscriptionPayment {
   id: number;
   invoice_id: number;
   razorpay_payment_id?: string;
-  amount: number;
+  amount_paise?: number;
+  amount_inr?: number;
+  amount?: number;
   currency: string;
   payment_method: string;
   status: string;
@@ -441,17 +447,67 @@ export interface SubscriptionInvoice {
   plan_id: number;
   plan_name?: string;
   billing_cycle: string;
-  subtotal: number;
-  discount_amount: number;
-  tax_amount: number;
-  final_amount: number;
+  subtotal_paise: number;
+  subtotal_inr: number;
+  subtotal?: number;
+  discount_paise: number;
+  discount_inr: number;
+  discount_amount?: number;
+  tax_percentage: number;
+  tax_paise: number;
+  tax_inr: number;
+  tax_amount?: number;
+  final_amount_paise: number;
+  final_amount_inr: number;
+  final_amount?: number;
   currency: string;
   status: 'UNPAID' | 'PAID' | 'VOID' | 'REFUNDED';
   billing_start_date?: string;
   billing_end_date?: string;
   paid_at?: string;
   created_at: string;
-  payments: SubscriptionPayment[];
+  payments?: SubscriptionPayment[];
+}
+
+export interface RestaurantSubscriptionStatus {
+  restaurant_id: number;
+  restaurant_name: string;
+  subscription_status: 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'EXPIRED' | 'CANCELLED' | 'SUSPENDED';
+  subscription_plan?: string;
+  subscription_expires_at?: string;
+  grace_period_days: number;
+  days_remaining?: number;
+  is_in_grace_period: boolean;
+  grace_period_remaining_days?: number;
+  can_operate: boolean;
+}
+
+export interface SubscriptionNotification {
+  id: number;
+  restaurant_id: number;
+  notification_type: 'RENEWAL_UPCOMING' | 'RENEWAL_SUCCESS' | 'PAST_DUE_WARNING' | 'EXPIRED' | 'PAYMENT_FAILED';
+  title: string;
+  message: string;
+  is_read: boolean;
+  created_at: string;
+}
+
+export interface SubscriptionCheckoutPreview {
+  plan_code: string;
+  name: string;
+  billing_cycle: string;
+  duration_days: number;
+  subtotal_paise: number;
+  subtotal_inr: number;
+  discount_paise: number;
+  discount_inr: number;
+  tax_paise: number;
+  tax_inr: number;
+  final_amount_paise: number;
+  final_amount_inr: number;
+  coupon_code?: string;
+  billing_start_date: string;
+  billing_end_date: string;
 }
 
 

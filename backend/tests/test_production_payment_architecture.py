@@ -444,37 +444,36 @@ def test_flow_b_subscription_catalog_and_coupon_discount():
     res_plans = client.get("/api/v1/subscriptions/plans")
     assert res_plans.status_code == 200
     plans = res_plans.json()
-    assert len(plans) >= 3
+    assert len(plans) >= 2
     plan_codes = [p["plan_code"] for p in plans]
-    assert "STARTER" in plan_codes
-    assert "PRO" in plan_codes
-    assert "ENTERPRISE" in plan_codes
+    assert "MONTHLY" in plan_codes
+    assert "YEARLY" in plan_codes
 
     # 2. Validate coupon LAUNCH50
     res_coupon = client.post("/api/v1/subscriptions/coupons/validate", json={
         "code": "LAUNCH50",
-        "plan_code": "PRO"
+        "plan_code": "MONTHLY"
     })
     assert res_coupon.status_code == 200
     coupon_data = res_coupon.json()
     assert coupon_data["is_valid"] is True
     assert coupon_data["discount_percentage"] == 50.0
-    assert coupon_data["discount_amount"] > 0
+    assert coupon_data["discount_paise"] > 0
 
     # 3. Test invalid coupon
     res_invalid = client.post("/api/v1/subscriptions/coupons/validate", json={
         "code": "NON_EXISTENT_CODE",
-        "plan_code": "PRO"
+        "plan_code": "MONTHLY"
     })
     assert res_invalid.status_code == 200
     assert res_invalid.json()["is_valid"] is False
 
 def test_flow_b_subscription_checkout_platform_merchant(auth_tokens):
-    # Restaurant owner checks out PRO plan with LAUNCH50 coupon
+    # Restaurant owner checks out MONTHLY plan with LAUNCH50 coupon
     res = client.post(
         "/api/v1/subscriptions/checkout",
         json={
-            "plan_code": "PRO",
+            "plan_code": "MONTHLY",
             "billing_cycle": "MONTHLY",
             "coupon_code": "LAUNCH50"
         },
@@ -484,17 +483,17 @@ def test_flow_b_subscription_checkout_platform_merchant(auth_tokens):
     data = res.json()
     assert "razorpay_order_id" in data
     assert data["key_id"] == settings.PLATFORM_RAZORPAY_KEY_ID
-    assert data["subtotal"] == 4999.0
-    assert data["discount_amount"] == 2499.5
-    # Tax 18% on (4999 - 2499.5) = 2499.5 * 0.18 = 449.91
-    assert data["tax_amount"] == 449.91
-    assert data["final_amount"] == 2949.41
+    assert data["subtotal_paise"] == 199900
+    assert data["discount_paise"] == 99950
+    # Tax 18% on (199900 - 99950 = 99950) = 17991 paise
+    assert data["tax_paise"] == 17991
+    assert data["final_amount_paise"] == 117941
 
 def test_flow_b_subscription_payment_verification_and_tenant_activation(auth_tokens):
     # 1. Create checkout invoice
     checkout_res = client.post(
         "/api/v1/subscriptions/checkout",
-        json={"plan_code": "PRO", "billing_cycle": "MONTHLY"},
+        json={"plan_code": "MONTHLY", "billing_cycle": "MONTHLY"},
         headers={"Authorization": f"Bearer {auth_tokens['owner']}"}
     )
     invoice_id = checkout_res.json()["invoice_id"]
@@ -541,9 +540,10 @@ def test_flow_b_platform_webhook_signature_and_idempotency():
         restaurant_id=1,
         plan_id=1,
         billing_cycle="MONTHLY",
-        subtotal=1999.0,
-        tax_amount=359.82,
-        final_amount=2358.82,
+        subtotal_paise=199900,
+        discount_paise=0,
+        tax_paise=35982,
+        final_amount_paise=235882,
         status="UNPAID"
     )
     db.add(inv)

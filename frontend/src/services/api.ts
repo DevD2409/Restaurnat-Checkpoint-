@@ -274,17 +274,25 @@ export const subscriptionsApi = {
     const res = await apiClient.get('/subscriptions/plans');
     return res.data;
   },
-  validateCoupon: async (code: string, planCode: string) => {
+  validateCoupon: async (code: string, planCode: string, restaurantId?: number) => {
     const res = await apiClient.post('/subscriptions/coupons/validate', {
       code,
-      plan_code: planCode
+      plan_code: planCode,
+      restaurant_id: restaurantId
+    });
+    return res.data;
+  },
+  previewCheckout: async (planCode: string, couponCode?: string, restaurantId?: number) => {
+    const res = await apiClient.post('/subscriptions/checkout/preview', {
+      plan_code: planCode,
+      coupon_code: couponCode,
+      restaurant_id: restaurantId
     });
     return res.data;
   },
   checkout: async (data: {
     restaurant_id?: number;
     plan_code: string;
-    billing_cycle?: string;
     coupon_code?: string;
   }) => {
     const res = await apiClient.post('/subscriptions/checkout', data);
@@ -299,14 +307,50 @@ export const subscriptionsApi = {
     const res = await apiClient.post('/subscriptions/verify', data);
     return res.data;
   },
+  getMyStatus: async () => {
+    const res = await apiClient.get('/subscriptions/my-status');
+    return res.data;
+  },
   getInvoices: async () => {
     const res = await apiClient.get('/subscriptions/invoices');
     return res.data;
   },
-  refund: async (paymentId: number, amount?: number, reason?: string) => {
+  getNotifications: async () => {
+    const res = await apiClient.get('/subscriptions/notifications');
+    return res.data;
+  },
+  getAdminAnalytics: async () => {
+    const res = await apiClient.get('/subscriptions/admin/analytics');
+    return res.data;
+  },
+  createPlan: async (planData: any) => {
+    const res = await apiClient.post('/subscriptions/admin/plans', planData);
+    return res.data;
+  },
+  togglePlan: async (planId: number, isActive: boolean) => {
+    const res = await apiClient.patch(`/subscriptions/admin/plans/${planId}?is_active=${isActive}`);
+    return res.data;
+  },
+  listCoupons: async () => {
+    const res = await apiClient.get('/subscriptions/admin/coupons');
+    return res.data;
+  },
+  createCoupon: async (couponData: any) => {
+    const res = await apiClient.post('/subscriptions/admin/coupons', couponData);
+    return res.data;
+  },
+  toggleCoupon: async (couponId: number, isActive: boolean) => {
+    const res = await apiClient.patch(`/subscriptions/admin/coupons/${couponId}?is_active=${isActive}`);
+    return res.data;
+  },
+  evaluateExpiries: async () => {
+    const res = await apiClient.post('/subscriptions/admin/evaluate-expiries');
+    return res.data;
+  },
+  refund: async (paymentId: number, amountPaise?: number, reason?: string) => {
     const res = await apiClient.post('/subscriptions/refund', {
       payment_id: paymentId,
-      amount,
+      amount_paise: amountPaise,
       reason
     });
     return res.data;

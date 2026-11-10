@@ -89,9 +89,26 @@ def get_active_tenant(
     restaurant = db.query(Restaurant).filter(Restaurant.id == tenant_id, Restaurant.is_active == True).first()
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant tenant not found or inactive")
-    if restaurant.subscription_status in ["SUSPENDED", "CANCELLED"]:
+    
+    live_status = restaurant.evaluate_subscription_status()
+    if live_status in ["EXPIRED", "SUSPENDED", "CANCELLED"]:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=f"Restaurant subscription is {restaurant.subscription_status}. Please renew your plan."
+            detail=f"Restaurant subscription is {live_status}. Please renew your plan to restore operational access."
         )
     return restaurant
+
+def require_feature_entitlement(feature_key: str):
+    """Verifies that the restaurant's active subscription tier includes access to a requested feature."""
+    def checker(tenant: Restaurant = Depends(get_active_tenant), db: Session = Depends(get_db)):
+        from app.models.subscription import SubscriptionPlan
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.plan_code == tenant.subscription_plan).first()
+        if plan:
+            entitlements = plan.get_entitlements()
+            if not entitlements.get(feature_key, False):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Feature '{feature_key}' is not included in the {tenant.subscription_plan} plan. Please upgrade your subscription."
+                )
+        return tenant
+    return checker

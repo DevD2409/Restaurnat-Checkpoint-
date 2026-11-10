@@ -234,7 +234,7 @@ class PaymentService:
     ) -> Dict[str, Any]:
         """Creates a Razorpay order on the SRMP platform's verified merchant account."""
         creds = cls.get_platform_credentials()
-        amount_paise = int(round(invoice.final_amount * 100))
+        amount_paise = invoice.final_amount_paise if getattr(invoice, 'final_amount_paise', None) else int(round(getattr(invoice, 'final_amount', 0.0) * 100))
         client = cls.get_platform_client()
         order_id = f"order_saas_mock_{int(time.time())}_{invoice.id}"
 
@@ -256,9 +256,10 @@ class PaymentService:
                 logger.error(f"Failed to create SaaS subscription order: {e}")
                 order_id = f"order_saas_mock_{int(time.time())}_{invoice.id}"
 
+        final_inr = getattr(invoice, 'final_amount_inr', round(amount_paise / 100.0, 2))
         return {
             "razorpay_order_id": order_id,
-            "amount": invoice.final_amount,
+            "amount": final_inr,
             "amount_paise": amount_paise,
             "currency": invoice.currency,
             "key_id": creds["key_id"],

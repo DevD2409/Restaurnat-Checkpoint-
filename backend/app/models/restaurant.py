@@ -44,9 +44,10 @@ class Restaurant(Base):
     settlement_bank_account_verified = Column(Boolean, default=False)
     
     # SaaS Subscription Plan & Account Status (Flow B)
-    subscription_plan = Column(String(50), default="PRO")  # FREE_TRIAL, STARTER, PRO, ENTERPRISE
-    subscription_status = Column(String(50), default="ACTIVE")  # ACTIVE, TRIALING, SUSPENDED, CANCELLED
+    subscription_plan = Column(String(50), default="MONTHLY")  # MONTHLY, YEARLY, TRIAL
+    subscription_status = Column(String(50), default="ACTIVE")  # TRIAL, ACTIVE, PAST_DUE, EXPIRED, CANCELLED, SUSPENDED
     subscription_expires_at = Column(DateTime(timezone=True), nullable=True)
+    grace_period_days = Column(Integer, default=7)
     owner_id = Column(Integer, nullable=True)
     
     opening_time = Column(String(20), default="10:00 AM")
@@ -68,3 +69,27 @@ class Restaurant(Base):
     @property
     def has_webhook_secret(self) -> bool:
         return bool(self.razorpay_webhook_secret_enc)
+
+    def evaluate_subscription_status(self) -> str:
+        """Evaluates live subscription status considering expiration date and grace period."""
+        if self.subscription_status in ["CANCELLED", "SUSPENDED"]:
+            return self.subscription_status
+        if not self.subscription_expires_at:
+            return self.subscription_status or "TRIAL"
+        
+        from datetime import datetime, timezone, timedelta
+        # Normalize timezone if present
+        now = datetime.now()
+        exp = self.subscription_expires_at
+        if hasattr(exp, 'tzinfo') and exp.tzinfo is not None:
+            now = datetime.now(timezone.utc)
+            
+        if now <= exp:
+            return "ACTIVE"
+        
+        grace_days = self.grace_period_days if self.grace_period_days is not None else 7
+        grace_deadline = exp + timedelta(days=grace_days)
+        if now <= grace_deadline:
+            return "PAST_DUE"
+        
+        return "EXPIRED"
