@@ -3,8 +3,9 @@ from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.core.database import Base, engine
+from app.core.database import Base, engine, SessionLocal
 from app.core.security import decode_access_token
+from app.models.table import Table
 from app.utils.seed_data import seed_database
 from app.websocket.connection_manager import manager
 
@@ -149,17 +150,40 @@ async def websocket_channel_endpoint(
     except Exception:
         manager.disconnect(websocket, channel=channel, restaurant_id=1)
 
-@app.websocket("/ws/table/{table_id}")
-async def websocket_table_endpoint(websocket: WebSocket, table_id: int):
-    await manager.connect(websocket, table_id=table_id, restaurant_id=1)
+@app.websocket("/ws/tenant/{tenant_id}/table/{table_id}")
+async def websocket_tenant_table_endpoint(websocket: WebSocket, tenant_id: int, table_id: int):
+    await manager.connect(websocket, table_id=table_id, restaurant_id=tenant_id)
     try:
         while True:
             data = await websocket.receive_text()
-            await websocket.send_text(f'{{"type": "PONG", "table_id": {table_id}}}')
+            await websocket.send_text(f'{{"type": "PONG", "tenant_id": {tenant_id}, "table_id": {table_id}}}')
     except WebSocketDisconnect:
-        manager.disconnect(websocket, table_id=table_id, restaurant_id=1)
+        manager.disconnect(websocket, table_id=table_id, restaurant_id=tenant_id)
     except Exception:
-        manager.disconnect(websocket, table_id=table_id, restaurant_id=1)
+        manager.disconnect(websocket, table_id=table_id, restaurant_id=tenant_id)
+
+@app.websocket("/ws/table/{table_id}")
+async def websocket_table_endpoint(websocket: WebSocket, table_id: int):
+    # Dynamically resolve restaurant_id from table record
+    resolved_tenant_id = 1
+    try:
+        db = SessionLocal()
+        table = db.query(Table).filter(Table.id == table_id).first()
+        if table and table.restaurant_id:
+            resolved_tenant_id = table.restaurant_id
+        db.close()
+    except Exception:
+        resolved_tenant_id = 1
+
+    await manager.connect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f'{{"type": "PONG", "tenant_id": {resolved_tenant_id}, "table_id": {table_id}}}')
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
+    except Exception:
+        manager.disconnect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
 
 if __name__ == "__main__":
     import uvicorn

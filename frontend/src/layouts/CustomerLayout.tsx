@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useParams } from 'react-router-dom';
+import axios from 'axios';
 import {
   Utensils, ShoppingBag, Bell, Wifi, SplitSquareVertical,
   Calendar, CheckCircle2, X
@@ -8,7 +9,7 @@ import { useCart } from '../context/CartContext';
 import { serviceRequestApi } from '../services/api';
 
 export const CustomerLayout: React.FC = () => {
-  const { qrToken } = useParams<{ qrToken: string }>();
+  const { tenantSlug, qrToken } = useParams<{ tenantSlug?: string; qrToken?: string }>();
   const location = useLocation();
   const { totalItemCount, tableNumber, tableId } = useCart();
   const [showServiceModal, setShowServiceModal] = useState(false);
@@ -16,7 +17,55 @@ export const CustomerLayout: React.FC = () => {
   const [customNote, setCustomNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const basePath = qrToken ? `/table/${qrToken}` : '/menu';
+  const [restaurantProfile, setRestaurantProfile] = useState<{
+    name: string;
+    tagline: string;
+    logo_url: string | null;
+    primary_color: string;
+  }>({
+    name: 'The Royal Saffron',
+    tagline: 'Smart Bistro & Lounge',
+    logo_url: null,
+    primary_color: '#f97316'
+  });
+
+  useEffect(() => {
+    const fetchBranding = async () => {
+      try {
+        if (tenantSlug) {
+          const res = await axios.get(`/api/v1/restaurants/by-slug/${tenantSlug}`);
+          if (res.data) {
+            setRestaurantProfile({
+              name: res.data.name || 'Smart Restaurant',
+              tagline: res.data.tagline || 'Exquisite Flavors & Hospitality',
+              logo_url: res.data.logo_url || null,
+              primary_color: res.data.primary_color || '#f97316',
+            });
+            if (res.data.primary_color) {
+              document.documentElement.style.setProperty('--color-brand-500', res.data.primary_color);
+            }
+          }
+        } else {
+          const res = await axios.get('/api/v1/restaurants/');
+          if (res.data) {
+            setRestaurantProfile({
+              name: res.data.name,
+              tagline: res.data.tagline,
+              logo_url: res.data.logo_url,
+              primary_color: res.data.primary_color || '#f97316',
+            });
+          }
+        }
+      } catch (e) {
+        // Fallback default
+      }
+    };
+    fetchBranding();
+  }, [tenantSlug]);
+
+  const basePath = tenantSlug
+    ? (qrToken ? `/${tenantSlug}/table/${qrToken}` : `/${tenantSlug}/menu`)
+    : (qrToken ? `/table/${qrToken}` : '/menu');
 
   const handleQuickRequest = async (type: 'CALL_WAITER' | 'WATER' | 'CUTLERY' | 'ASSISTANCE' | 'BILL') => {
     if (!tableId) {
@@ -57,15 +106,26 @@ export const CustomerLayout: React.FC = () => {
       <header className="sticky top-0 z-40 bg-[#12131a]/95 backdrop-blur-md border-b border-zinc-800/80 px-4 py-3">
         <div className="max-w-4xl mx-auto flex items-center justify-between">
           <Link to={basePath} className="flex items-center space-x-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-600 to-amber-500 flex items-center justify-center shadow-lg shadow-brand-500/20">
-              <Utensils className="w-5 h-5 text-white" />
-            </div>
+            {restaurantProfile.logo_url ? (
+              <img
+                src={restaurantProfile.logo_url}
+                alt={restaurantProfile.name}
+                className="w-9 h-9 rounded-xl object-cover shadow-lg border border-zinc-700"
+              />
+            ) : (
+              <div
+                className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg transition-colors"
+                style={{ backgroundColor: restaurantProfile.primary_color || '#f97316' }}
+              >
+                <Utensils className="w-5 h-5 text-white" />
+              </div>
+            )}
             <div>
               <span className="font-bold text-sm sm:text-base tracking-tight text-white block leading-tight">
-                The Royal Saffron
+                {restaurantProfile.name}
               </span>
               <span className="text-[10px] sm:text-[11px] font-medium text-amber-400/90 tracking-wide block">
-                Smart Bistro & Lounge
+                {restaurantProfile.tagline}
               </span>
             </div>
           </Link>
