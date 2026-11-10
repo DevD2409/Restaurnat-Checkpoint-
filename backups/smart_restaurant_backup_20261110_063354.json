@@ -1,0 +1,9 @@
+{
+  "engine": "sqlite",
+  "timestamp": "20261110_063354",
+  "backup_file": "smart_restaurant_backup_20261110_063354.db",
+  "source_file": "smart_restaurant.db",
+  "size_bytes": 712704,
+  "sha256": "3dba85d7348fbbe27183a448ee2384ac34afbb3c10aa93dde619fffccaccf9c0",
+  "status": "COMPLETED"
+}
