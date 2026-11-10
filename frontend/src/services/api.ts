@@ -254,6 +254,63 @@ export const billingApi = {
     });
     return res.data;
   },
+  refundPayment: async (paymentId: number, amount?: number, reason?: string) => {
+    const res = await apiClient.post('/payments/refund', {
+      payment_id: paymentId,
+      amount,
+      reason
+    });
+    return res.data;
+  },
+  reconcile: async (billId: number) => {
+    const res = await apiClient.get(`/payments/reconcile/${billId}`);
+    return res.data;
+  },
+};
+
+// Subscriptions & SaaS Ledger API (Flow B)
+export const subscriptionsApi = {
+  getPlans: async () => {
+    const res = await apiClient.get('/subscriptions/plans');
+    return res.data;
+  },
+  validateCoupon: async (code: string, planCode: string) => {
+    const res = await apiClient.post('/subscriptions/coupons/validate', {
+      code,
+      plan_code: planCode
+    });
+    return res.data;
+  },
+  checkout: async (data: {
+    restaurant_id?: number;
+    plan_code: string;
+    billing_cycle?: string;
+    coupon_code?: string;
+  }) => {
+    const res = await apiClient.post('/subscriptions/checkout', data);
+    return res.data;
+  },
+  verifyPayment: async (data: {
+    invoice_id: number;
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }) => {
+    const res = await apiClient.post('/subscriptions/verify', data);
+    return res.data;
+  },
+  getInvoices: async () => {
+    const res = await apiClient.get('/subscriptions/invoices');
+    return res.data;
+  },
+  refund: async (paymentId: number, amount?: number, reason?: string) => {
+    const res = await apiClient.post('/subscriptions/refund', {
+      payment_id: paymentId,
+      amount,
+      reason
+    });
+    return res.data;
+  },
 };
 
 // Analytics API

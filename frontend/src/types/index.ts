@@ -410,3 +410,48 @@ export interface CartItem {
   image_url?: string;
 }
 
+// Subscription & SaaS Ledger Types (Flow B)
+export interface SubscriptionPlan {
+  id: number;
+  plan_code: string;
+  name: string;
+  billing_cycle: string;
+  price: number;
+  currency: string;
+  features?: string;
+  max_tables: number;
+  is_active: boolean;
+}
+
+export interface SubscriptionPayment {
+  id: number;
+  invoice_id: number;
+  razorpay_payment_id?: string;
+  amount: number;
+  currency: string;
+  payment_method: string;
+  status: string;
+  created_at: string;
+}
+
+export interface SubscriptionInvoice {
+  id: number;
+  invoice_number: string;
+  restaurant_id: number;
+  plan_id: number;
+  plan_name?: string;
+  billing_cycle: string;
+  subtotal: number;
+  discount_amount: number;
+  tax_amount: number;
+  final_amount: number;
+  currency: string;
+  status: 'UNPAID' | 'PAID' | 'VOID' | 'REFUNDED';
+  billing_start_date?: string;
+  billing_end_date?: string;
+  paid_at?: string;
+  created_at: string;
+  payments: SubscriptionPayment[];
+}
+
+

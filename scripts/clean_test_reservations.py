@@ -10,3 +10,4 @@ c.execute("DELETE FROM reservations WHERE customer_name = 'Lord Robert Crawly'")
 conn.commit()
 print("Deleted count:", c.rowcount)
 conn.close()
+

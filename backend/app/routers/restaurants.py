@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.dependencies import get_current_user, require_roles, get_tenant_id, oauth2_scheme
 from app.core.security import decode_access_token
+from app.core.encryption import encrypt_secret
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
 from app.schemas.restaurant import RestaurantResponse, RestaurantUpdate, RestaurantPublicProfile
@@ -103,6 +104,25 @@ def update_restaurant_profile(
         if existing:
             raise HTTPException(status_code=400, detail="Slug is already taken by another restaurant")
 
+    # Securely encrypt secret keys before storing
+    if "razorpay_key_secret" in update_dict:
+        val = update_dict.pop("razorpay_key_secret")
+        if val and val.strip():
+            restaurant.razorpay_key_secret_enc = encrypt_secret(val.strip())
+    elif "razorpay_key_secret_enc" in update_dict:
+        val = update_dict.pop("razorpay_key_secret_enc")
+        if val and val.strip():
+            restaurant.razorpay_key_secret_enc = encrypt_secret(val.strip())
+
+    if "razorpay_webhook_secret" in update_dict:
+        val = update_dict.pop("razorpay_webhook_secret")
+        if val and val.strip():
+            restaurant.razorpay_webhook_secret_enc = encrypt_secret(val.strip())
+    elif "razorpay_webhook_secret_enc" in update_dict:
+        val = update_dict.pop("razorpay_webhook_secret_enc")
+        if val and val.strip():
+            restaurant.razorpay_webhook_secret_enc = encrypt_secret(val.strip())
+
     for field, value in update_dict.items():
         setattr(restaurant, field, value)
 
@@ -136,6 +156,25 @@ def update_specific_restaurant(
         existing = db.query(Restaurant).filter(Restaurant.slug == update_dict["slug"]).first()
         if existing:
             raise HTTPException(status_code=400, detail="Slug is already taken by another restaurant")
+
+    # Securely encrypt secret keys before storing
+    if "razorpay_key_secret" in update_dict:
+        val = update_dict.pop("razorpay_key_secret")
+        if val and val.strip():
+            restaurant.razorpay_key_secret_enc = encrypt_secret(val.strip())
+    elif "razorpay_key_secret_enc" in update_dict:
+        val = update_dict.pop("razorpay_key_secret_enc")
+        if val and val.strip():
+            restaurant.razorpay_key_secret_enc = encrypt_secret(val.strip())
+
+    if "razorpay_webhook_secret" in update_dict:
+        val = update_dict.pop("razorpay_webhook_secret")
+        if val and val.strip():
+            restaurant.razorpay_webhook_secret_enc = encrypt_secret(val.strip())
+    elif "razorpay_webhook_secret_enc" in update_dict:
+        val = update_dict.pop("razorpay_webhook_secret_enc")
+        if val and val.strip():
+            restaurant.razorpay_webhook_secret_enc = encrypt_secret(val.strip())
 
     for field, value in update_dict.items():
         setattr(restaurant, field, value)

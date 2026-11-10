@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 class RestaurantBase(BaseModel):
     name: str
@@ -54,12 +55,23 @@ class RestaurantUpdate(BaseModel):
     opening_time: Optional[str] = None
     closing_time: Optional[str] = None
     razorpay_key_id: Optional[str] = None
+    razorpay_key_secret: Optional[str] = None
     razorpay_key_secret_enc: Optional[str] = None
+    razorpay_webhook_secret: Optional[str] = None
+    razorpay_webhook_secret_enc: Optional[str] = None
+    razorpay_account_id: Optional[str] = None
+    payment_gateway_mode: Optional[str] = None
     is_active: Optional[bool] = None
 
 class RestaurantResponse(RestaurantBase):
     id: int
     razorpay_key_id: Optional[str] = None
+    has_razorpay_secret: bool = False
+    has_webhook_secret: bool = False
+    razorpay_account_id: Optional[str] = None
+    payment_gateway_mode: str = "DIRECT_MERCHANT"
+    settlement_bank_account_verified: bool = False
+    subscription_expires_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

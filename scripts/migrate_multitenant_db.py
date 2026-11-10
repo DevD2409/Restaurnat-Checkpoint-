@@ -92,3 +92,4 @@ if "feedbacks" not in tables:
 conn.commit()
 conn.close()
 print("Migration completed successfully!")
+

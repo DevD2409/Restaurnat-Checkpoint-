@@ -519,3 +519,4 @@ export function OnboardingPage() {
   );
 }
 export default OnboardingPage;
+

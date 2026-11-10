@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.models.billing import Bill, BillSplit, Payment, BillStatus, SplitType
+from app.models.restaurant import Restaurant
 from app.models.order import Order, OrderStatus, PaymentStatus
 from app.models.table import Table, TableStatus
 from app.schemas.billing import (
@@ -25,15 +26,19 @@ def get_or_create_bill_for_order(order_id: int, db: Session = Depends(get_db)):
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
 
+        restaurant = db.query(Restaurant).filter(Restaurant.id == order.restaurant_id).first()
+        tax_pct = restaurant.tax_percentage if restaurant else 5.0
+        service_pct = restaurant.service_charge_percentage if restaurant else 5.0
+
         bill = Bill(
             bill_number=f"INV-{order.order_number[4:]}",
             restaurant_id=order.restaurant_id,
             order_id=order.id,
             table_id=order.table_id,
             subtotal=order.subtotal,
-            tax_percentage=5.0,
+            tax_percentage=tax_pct,
             tax_amount=order.tax_amount,
-            service_charge_percentage=5.0,
+            service_charge_percentage=service_pct,
             service_charge=order.service_charge,
             tip_amount=order.tip_amount,
             discount_amount=0.0,

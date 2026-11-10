@@ -20,9 +20,16 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = f"sqlite:///{DEFAULT_DB_FILE}"
     
-    # Razorpay Payment Gateway (Sandbox defaults)
+    # Platform Razorpay Merchant Gateway (Flow B: SaaS Subscriptions)
+    PLATFORM_RAZORPAY_KEY_ID: str = "rzp_test_platform_key_2026"
+    PLATFORM_RAZORPAY_KEY_SECRET: str = "rzp_test_platform_secret_2026"
+    PLATFORM_RAZORPAY_WEBHOOK_SECRET: str = "rzp_test_platform_webhook_secret_2026"
+    PLATFORM_SETTLEMENT_ACCOUNT: str = "ACC_SRMP_CORP_HDFC_00192"
+
+    # Default Restaurant Razorpay Gateway (Flow A: Restaurant Order Payments Fallback)
     RAZORPAY_KEY_ID: str = "rzp_test_placeholder_key"
     RAZORPAY_KEY_SECRET: str = "rzp_test_placeholder_secret"
+    RAZORPAY_WEBHOOK_SECRET: str = "rzp_test_restaurant_webhook_secret_2026"
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [

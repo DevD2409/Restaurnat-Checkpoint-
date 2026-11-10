@@ -35,13 +35,18 @@ class Restaurant(Base):
     wifi_password = Column(String(100), default="DeliciousFood2026")
     wifi_instructions = Column(Text, default="Connect to guest Wi-Fi and enjoy high-speed internet during your culinary journey.")
     
-    # Tenant-Specific Payment Gateway
+    # Tenant-Specific Payment Gateway (Flow A)
     razorpay_key_id = Column(String(100), nullable=True)
     razorpay_key_secret_enc = Column(String(255), nullable=True)
+    razorpay_webhook_secret_enc = Column(String(255), nullable=True)
+    razorpay_account_id = Column(String(100), nullable=True)  # Razorpay Route linked account (e.g. acc_xxx)
+    payment_gateway_mode = Column(String(50), default="DIRECT_MERCHANT")  # DIRECT_MERCHANT or RAZORPAY_ROUTE
+    settlement_bank_account_verified = Column(Boolean, default=False)
     
-    # SaaS Subscription Plan & Account Status
+    # SaaS Subscription Plan & Account Status (Flow B)
     subscription_plan = Column(String(50), default="PRO")  # FREE_TRIAL, STARTER, PRO, ENTERPRISE
     subscription_status = Column(String(50), default="ACTIVE")  # ACTIVE, TRIALING, SUSPENDED, CANCELLED
+    subscription_expires_at = Column(DateTime(timezone=True), nullable=True)
     owner_id = Column(Integer, nullable=True)
     
     opening_time = Column(String(20), default="10:00 AM")
@@ -55,3 +60,11 @@ class Restaurant(Base):
     menu_categories = relationship("MenuCategory", back_populates="restaurant", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="restaurant", cascade="all, delete-orphan")
     feedbacks = relationship("Feedback", back_populates="restaurant", cascade="all, delete-orphan")
+
+    @property
+    def has_razorpay_secret(self) -> bool:
+        return bool(self.razorpay_key_secret_enc)
+
+    @property
+    def has_webhook_secret(self) -> bool:
+        return bool(self.razorpay_webhook_secret_enc)
