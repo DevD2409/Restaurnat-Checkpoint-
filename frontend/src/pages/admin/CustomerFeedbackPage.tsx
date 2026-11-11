@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { feedbackApi, restaurantApi } from '../../services/api';
 import { Feedback, FeedbackAnalytics } from '../../types';
+import { resolveMediaUrl } from '../../config/runtime';
 
 export const CustomerFeedbackPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
@@ -552,7 +553,7 @@ export const CustomerFeedbackPage: React.FC = () => {
                     {fb.photos.map((p, idx) => (
                       <img
                         key={idx}
-                        src={p.photo_url}
+                        src={resolveMediaUrl(p.photo_url)}
                         alt="Customer upload"
                         className="w-16 h-16 rounded-xl object-cover border border-zinc-700"
                       />

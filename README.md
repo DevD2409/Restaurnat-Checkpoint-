@@ -146,4 +146,26 @@ Frontend will be accessible at: `http://localhost:5173`
   - **Monthly Plan:** **₹999/month** (`99,900` integer paise) — inclusive of applicable taxes and compulsory charges.
   - **Yearly Plan:** **₹9,999/year** (`999,900` integer paise) — inclusive of applicable taxes and compulsory charges.
 - **Tax Treatment:** While operating as an unregistered individual business (`IS_GST_REGISTERED=false`), GST is not collected and Non-GST Payment Receipts (`R{FY}/...`) are issued. If GST registration + CA confirmation are enabled in configuration (`IS_GST_REGISTERED=true`, `IS_GST_RATE_CA_CONFIRMED=true`), 18% GST is extracted inclusively (`84,661 + 15,239 = 99,900` monthly; `847,373 + 152,527 = 999,900` yearly) without ever increasing the advertised final price.
-- **Dual-Flow Settlement Isolation:** Flow A restaurant customer dining payments settle strictly to each restaurant's own Razorpay merchant account; Flow B SaaS subscriptions settle strictly to the platform owner's configured merchant bank account. Live-mode payment flags remain disabled (`false`) by default for safe test-mode development.
+- **Dual-Flow Settlement Isolation:** Flow A restaurant customer dining payments settle strictly to each restaurant's own Razorpay merchant account; Flow B SaaS subscriptions settle strictly to the platform owner's configured merchant bank account. Online payment circuit breakers and live-mode payment flags fail closed by default (`FLOW_A_ENABLED=false`, `FLOW_B_ENABLED=false`, `LIVE_MODE_FLOW_A=false`, `LIVE_MODE_FLOW_B=false`, `EMERGENCY_DISABLE_PAYMENTS=true`, `DISABLE_RESTAURANT_PAYMENT_FALLBACK=true`).
+
+---
+
+## ☁️ Render Free-Tier Test Deployment Guide (Zero Paid Add-Ons)
+
+For free testing (Firebase Hosting Spark frontend + Render Free Web Service + Render Free PostgreSQL):
+
+1. **Service Configuration (`rootDir: backend`):**
+   - **Plan:** `Free` (`plan: free` in [`render.yaml`](render.yaml))
+   - **Runtime:** Python `3.12.10` (`PYTHON_VERSION=3.12.10`)
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 60`
+   - **Health Check Path:** `/health/ready`
+2. **Free-Tier Operational Caveats:**
+   - **No Pre-Deploy Command:** Render Free Web Services do not run `preDeployCommand`, so migrations run in `startCommand` via `alembic upgrade head && ...` (safe for PostgreSQL when no dangerous auto-`create_all` runs in production).
+   - **Ephemeral Media Storage:** Set `STORAGE_BACKEND=local` so S3/R2 credentials are not required during free testing. **Files uploaded to `/static/uploads` on Render Free Web Services are stored on ephemeral container disk and will NOT persist across restarts, sleep, or redeploys.** Configure Cloudflare R2 or AWS S3 (`STORAGE_BACKEND=s3`) before production persistence.
+   - **Free Database Retention & Cold Starts:** Render Free PostgreSQL instances expire after 30 days unless upgraded, and Free Web Services spin down after idle periods.
+3. **Required Environment Variables (configure secrets directly in Render Dashboard — never commit secret values):**
+   - **Required Runtime & Security:** `ENVIRONMENT=production`, `PYTHON_VERSION=3.12.10`, `DATABASE_URL` *(Internal Render Postgres URL)*, `SECRET_KEY` *(>=32 random URL-safe chars)*, `QR_SECRET` *(unique random secret)*, `SEED_DEMO_DATA=false`
+   - **Required CORS & Frontend Origin:** `FRONTEND_URL=https://srmp-platform.web.app`, `BACKEND_CORS_ORIGINS=["https://srmp-platform.web.app","https://srmp-platform.firebaseapp.com"]`
+   - **Required Safe Test Defaults (Payments Disabled & Local Storage):** `STORAGE_BACKEND=local`, `DISABLE_RESTAURANT_PAYMENT_FALLBACK=true`, `EMERGENCY_DISABLE_PAYMENTS=true`, `FLOW_A_ENABLED=false`, `FLOW_B_ENABLED=false`, `LIVE_MODE_FLOW_A=false`, `LIVE_MODE_FLOW_B=false`
+   - **Optional (Leave Unset in Free Test Mode unless Configured):** `PLATFORM_RAZORPAY_KEY_ID`, `PLATFORM_RAZORPAY_KEY_SECRET`, `PLATFORM_RAZORPAY_WEBHOOK_SECRET`, `S3_*`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `SENTRY_DSN` (`ENABLE_TRANSACTIONAL_EMAIL=false`)

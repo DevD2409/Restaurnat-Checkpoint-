@@ -1,6 +1,10 @@
 # ==============================================================================
-# SRMP Multi-Tenant SaaS - Render Blueprint (Infrastructure-as-Code)
-# Target: Render Managed PostgreSQL + FastAPI Web Service
+# SRMP Multi-Tenant SaaS - Render Blueprint (Free-Tier Test Deployment)
+# Target: Render Free PostgreSQL + Free FastAPI Web Service
+# Note: Free Web Services spin down after inactivity, use ephemeral local disk
+#       (uploaded images do not persist across restarts/redeploys), and do not
+#       support preDeployCommand. Render Free PostgreSQL instances expire after
+#       30 days unless upgraded. Manual Dashboard setup uses these same settings.
 # ==============================================================================
 
 services:
@@ -9,11 +13,11 @@ services:
     name: srmp-backend
     runtime: python
     region: singapore
-    plan: starter
+    plan: free
     rootDir: backend
     buildCommand: "pip install -r requirements.txt"
-    preDeployCommand: "alembic upgrade head"
-    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 60"
+    # Render Free Web Services do not support preDeployCommand; run Alembic before uvicorn
+    startCommand: "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 60"
     healthCheckPath: /health/ready
     autoDeploy: true
     envVars:
@@ -52,11 +56,11 @@ services:
         # Allowed Firebase Hosting origins for srmp-platform
         value: '["https://srmp-platform.web.app","https://srmp-platform.firebaseapp.com"]'
       - key: PLATFORM_RAZORPAY_KEY_ID
-        value: rzp_test_platform_key_2026
+        sync: false
       - key: PLATFORM_RAZORPAY_KEY_SECRET
         sync: false
       - key: PLATFORM_RAZORPAY_WEBHOOK_SECRET
-        generateValue: true
+        sync: false
       - key: PLATFORM_SETTLEMENT_ACCOUNT
         value: ""
       - key: BUSINESS_OPERATING_MODEL
@@ -76,15 +80,17 @@ services:
       - key: LIVE_MODE_FLOW_B
         value: "false"
       - key: FLOW_A_ENABLED
-        value: "true"
-      - key: FLOW_B_ENABLED
-        value: "true"
-      - key: EMERGENCY_DISABLE_PAYMENTS
         value: "false"
+      - key: FLOW_B_ENABLED
+        value: "false"
+      - key: EMERGENCY_DISABLE_PAYMENTS
+        value: "true"
+      # Temporary Free-tier storage: local filesystem is ephemeral on Render Free Web Services
+      # Uploaded media will be lost on service restarts/redeploys until S3/R2 is configured.
       - key: STORAGE_BACKEND
-        value: s3
+        value: local
       - key: S3_BUCKET_NAME
-        value: srmp-production-uploads
+        sync: false
       - key: S3_ENDPOINT_URL
         sync: false
       - key: S3_ACCESS_KEY_ID
@@ -135,10 +141,10 @@ services:
         sync: false
 
 databases:
-  # Render Managed PostgreSQL Database (PostgreSQL 16)
+  # Render Free PostgreSQL Database (PostgreSQL 16; expires after 30 days on Free tier)
   - name: srmp-postgres
     region: singapore
-    plan: starter
+    plan: free
     databaseName: srmp_production
     user: srmp_admin
     postgresMajorVersion: "16"

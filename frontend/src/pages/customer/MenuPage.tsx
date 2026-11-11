@@ -8,6 +8,7 @@ import {
 import { menuApi, tableApi } from '../../services/api';
 import { useCart } from '../../context/CartContext';
 import { MenuCategory, MenuItem, MenuCustomizationGroup } from '../../types';
+import { resolveMediaUrl } from '../../config/runtime';
 
 export const MenuPage: React.FC = () => {
   const { qrToken } = useParams<{ qrToken: string }>();
@@ -369,7 +370,7 @@ export const MenuPage: React.FC = () => {
                   {/* Right: Clean Dish Thumbnail */}
                   <div className="relative w-24 h-24 sm:w-28 sm:h-28 flex-shrink-0 rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-900">
                     <img
-                      src={dish.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop&q=60'}
+                      src={resolveMediaUrl(dish.image_url) || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop&q=60'}
                       alt={dish.name}
                       onError={handleImageError}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"

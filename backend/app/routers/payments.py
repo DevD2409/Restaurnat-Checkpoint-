@@ -26,6 +26,8 @@ def create_razorpay_order(data: RazorpayOrderCreate, db: Session = Depends(get_d
     Creates an authoritative Razorpay order on the restaurant's merchant account.
     All calculations are derived from authoritative database records.
     """
+    PaymentService.ensure_payments_active("A")
+
     bill = db.query(Bill).filter(Bill.id == data.bill_id).first()
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -66,6 +68,8 @@ async def verify_razorpay_payment(
     Cryptographically verifies the customer payment signature against the restaurant's key secret.
     Enforces idempotency and updates bill, order and table status.
     """
+    PaymentService.ensure_payments_active("A")
+
     bill = db.query(Bill).filter(Bill.id == data.bill_id).first()
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
@@ -193,6 +197,8 @@ async def restaurant_razorpay_webhook(
     Verifies raw body signature against the restaurant's webhook secret.
     Safely handles duplicate, delayed, failed and out-of-order events.
     """
+    PaymentService.ensure_payments_active("A")
+
     raw_body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")
 
@@ -339,6 +345,8 @@ async def refund_payment(
     Staff-authorised refund endpoint for customer food orders.
     Enforces strict tenant isolation and updates ledger and bill state.
     """
+    PaymentService.ensure_payments_active("A")
+
     payment = db.query(Payment).filter(Payment.id == data.payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Payment record not found")

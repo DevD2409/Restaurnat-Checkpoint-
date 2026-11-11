@@ -1,3 +1,5 @@
+import hmac
+import hashlib
 import pytest
 import time
 import json
@@ -6,7 +8,10 @@ import concurrent.futures
 from fastapi.testclient import TestClient
 from sqlalchemy import func
 from app.main import app
+from app.core.config import settings
 from app.core.database import SessionLocal
+from app.models.restaurant import Restaurant
+from app.services.payment_service import PaymentService
 from app.models.user import User, UserRole
 from app.models.table import Table, TableStatus, TableSession
 from app.models.menu import MenuItem, MenuCategory
@@ -519,8 +524,11 @@ def test_scenario_15_bill_splitting_equal_and_item_based():
 # ==============================================================================
 # SCENARIO 16 & 17: Razorpay sandbox payment verification & completion
 # ==============================================================================
-def test_scenario_16_and_17_razorpay_payment_and_completion():
+def test_scenario_16_and_17_razorpay_payment_and_completion(monkeypatch):
     """Verify Razorpay sandbox order creation, payment verification, and table status update."""
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
+
     order_id, table_id = _create_test_order()
     bill = client.get(f"/api/v1/billing/order/{order_id}").json()
     bill_id = bill["id"]
@@ -538,13 +546,25 @@ def test_scenario_16_and_17_razorpay_payment_and_completion():
     assert rzp_order_data["amount_paise"] == int(final_amount * 100)
     order_mock_id = rzp_order_data["razorpay_order_id"]
 
-    # 2. Verify Razorpay payment
+    # 2. Compute authentic HMAC-SHA256 signature & verify Razorpay payment
+    db = SessionLocal()
+    restaurant = db.query(Restaurant).filter(Restaurant.id == bill["restaurant_id"]).first()
+    secret = PaymentService.get_restaurant_credentials(restaurant)["key_secret"]
+    db.close()
+    assert secret
+
     unique_pay_id = f"pay_{uuid.uuid4().hex[:12]}"
+    valid_sig = hmac.new(
+        secret.encode(),
+        f"{order_mock_id}|{unique_pay_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
     verify_resp = client.post("/api/v1/payments/verify-razorpay-payment", json={
         "bill_id": bill_id,
         "razorpay_order_id": order_mock_id,
         "razorpay_payment_id": unique_pay_id,
-        "razorpay_signature": "mock_signature_valid_sandbox",
+        "razorpay_signature": valid_sig,
         "amount": final_amount
     })
     assert verify_resp.status_code == 200
@@ -777,19 +797,35 @@ def test_additional_websocket_connection_and_reconnection():
 # ==============================================================================
 # ADDITIONAL VALIDATION 5: Duplicate payment callbacks
 # ==============================================================================
-def test_additional_duplicate_payment_callbacks():
+def test_additional_duplicate_payment_callbacks(monkeypatch):
     """Verify idempotency on duplicate payment callbacks: no duplicate deduction or crash."""
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
+
     order_id, _ = _create_test_order()
     bill = client.get(f"/api/v1/billing/order/{order_id}").json()
     bill_id = bill["id"]
     amount = bill["final_amount"]
 
+    db = SessionLocal()
+    restaurant = db.query(Restaurant).filter(Restaurant.id == bill["restaurant_id"]).first()
+    secret = PaymentService.get_restaurant_credentials(restaurant)["key_secret"]
+    db.close()
+    assert secret
+
+    rzp_order_id = f"order_mock_{int(time.time())}"
     unique_tx = f"pay_idempotent_{uuid.uuid4().hex[:10]}"
+    valid_sig = hmac.new(
+        secret.encode(),
+        f"{rzp_order_id}|{unique_tx}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
     payload = {
         "bill_id": bill_id,
-        "razorpay_order_id": f"order_mock_{int(time.time())}",
+        "razorpay_order_id": rzp_order_id,
         "razorpay_payment_id": unique_tx,
-        "razorpay_signature": "valid_signature_sandbox",
+        "razorpay_signature": valid_sig,
         "amount": amount
     }
 

@@ -36,25 +36,41 @@ class Settings(BaseSettings):
         return v
     
     # Platform Razorpay Merchant Gateway (Flow B: SaaS Subscriptions)
-    PLATFORM_RAZORPAY_KEY_ID: str = "rzp_test_platform_key_2026"
-    PLATFORM_RAZORPAY_KEY_SECRET: str = "rzp_test_platform_secret_2026"
-    PLATFORM_RAZORPAY_WEBHOOK_SECRET: str = "rzp_test_platform_webhook_secret_2026"
+    PLATFORM_RAZORPAY_KEY_ID: Optional[str] = None
+    PLATFORM_RAZORPAY_KEY_SECRET: Optional[str] = None
+    PLATFORM_RAZORPAY_WEBHOOK_SECRET: Optional[str] = None
     PLATFORM_SETTLEMENT_ACCOUNT: Optional[str] = None  # Pending owner's verified individual bank account after Razorpay approval
     PLATFORM_SETTLEMENT_BANK_NAME: Optional[str] = None
     PLATFORM_SETTLEMENT_IFSC: Optional[str] = None
 
     # Default Restaurant Razorpay Gateway (Flow A: Restaurant Order Payments Fallback)
-    RAZORPAY_KEY_ID: str = "rzp_test_placeholder_key"
-    RAZORPAY_KEY_SECRET: str = "rzp_test_placeholder_secret"
-    RAZORPAY_WEBHOOK_SECRET: str = "rzp_test_restaurant_webhook_secret_2026"
-    DISABLE_RESTAURANT_PAYMENT_FALLBACK: bool = False
+    RAZORPAY_KEY_ID: Optional[str] = None
+    RAZORPAY_KEY_SECRET: Optional[str] = None
+    RAZORPAY_WEBHOOK_SECRET: Optional[str] = None
+    DISABLE_RESTAURANT_PAYMENT_FALLBACK: bool = True
 
     # Independent Payment Flow Activation & Emergency Circuit Breakers
-    FLOW_A_ENABLED: bool = True
-    FLOW_B_ENABLED: bool = True
+    FLOW_A_ENABLED: bool = False
+    FLOW_B_ENABLED: bool = False
     LIVE_MODE_FLOW_A: bool = False
     LIVE_MODE_FLOW_B: bool = False
-    EMERGENCY_DISABLE_PAYMENTS: bool = False
+    EMERGENCY_DISABLE_PAYMENTS: bool = True
+
+    @field_validator(
+        "PLATFORM_RAZORPAY_KEY_ID",
+        "PLATFORM_RAZORPAY_KEY_SECRET",
+        "PLATFORM_RAZORPAY_WEBHOOK_SECRET",
+        "RAZORPAY_KEY_ID",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+        mode="before",
+    )
+    @classmethod
+    def normalize_blank_payment_secrets(cls, v: Optional[str]) -> Optional[str]:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
 
     # Platform Business Identity Profile (Individual / Unregistered Business by Default)
     BUSINESS_OPERATING_MODEL: str = "INDIVIDUAL_UNREGISTERED"  # INDIVIDUAL_UNREGISTERED or REGISTERED_ENTITY
@@ -124,6 +140,8 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production_configuration(self):
         env_lower = self.ENVIRONMENT.lower()
+        if self.STORAGE_BACKEND not in ("local", "s3"):
+            raise ValueError("STORAGE_BACKEND must be either 'local' or 's3'!")
         if env_lower == "production" and self.SEED_DEMO_DATA is True:
             raise ValueError("In production, SEED_DEMO_DATA must never be enabled!")
         if env_lower in ["production", "staging"]:
@@ -134,6 +152,28 @@ class Settings(BaseSettings):
                 raise ValueError(f"In {env_lower}, DATABASE_URL must be a PostgreSQL connection string, not SQLite!")
             if "secure-salt-2026" in self.QR_SECRET:
                 raise ValueError(f"In {env_lower}, QR_SECRET must be configured with a unique secret!")
+            placeholder_markers = ("placeholder", "change-in-production", "mock", "dummy", "_2026")
+            for field_name in (
+                "PLATFORM_RAZORPAY_KEY_ID",
+                "PLATFORM_RAZORPAY_KEY_SECRET",
+                "PLATFORM_RAZORPAY_WEBHOOK_SECRET",
+                "RAZORPAY_KEY_ID",
+                "RAZORPAY_KEY_SECRET",
+                "RAZORPAY_WEBHOOK_SECRET",
+            ):
+                field_val = getattr(self, field_name, None)
+                if field_val and any(marker in field_val.lower() for marker in placeholder_markers):
+                    raise ValueError(f"In {env_lower}, {field_name} cannot contain placeholder or default test values!")
+            if not self.EMERGENCY_DISABLE_PAYMENTS and self.FLOW_B_ENABLED:
+                if not (
+                    self.PLATFORM_RAZORPAY_KEY_ID
+                    and self.PLATFORM_RAZORPAY_KEY_SECRET
+                    and self.PLATFORM_RAZORPAY_WEBHOOK_SECRET
+                ):
+                    raise ValueError(
+                        f"In {env_lower}, when FLOW_B_ENABLED is True and EMERGENCY_DISABLE_PAYMENTS is False, "
+                        "PLATFORM_RAZORPAY_KEY_ID, PLATFORM_RAZORPAY_KEY_SECRET, and PLATFORM_RAZORPAY_WEBHOOK_SECRET must be configured!"
+                    )
             if self.STORAGE_BACKEND == "s3":
                 if not (self.S3_BUCKET_NAME and self.S3_ENDPOINT_URL and self.S3_ACCESS_KEY_ID and self.S3_SECRET_ACCESS_KEY):
                     raise ValueError(f"In {env_lower} with STORAGE_BACKEND='s3', all S3/R2 credentials (BUCKET, ENDPOINT, ACCESS_KEY, SECRET_KEY) must be provided!")

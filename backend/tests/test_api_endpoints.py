@@ -167,7 +167,17 @@ def test_service_request_flow():
     assert resolve_res.status_code == 200
     assert resolve_res.json()["status"] == "RESOLVED"
 
-def test_billing_and_payment():
+def test_billing_and_payment(monkeypatch):
+    import hmac
+    import hashlib
+    from app.core.config import settings
+    from app.core.database import SessionLocal
+    from app.models.restaurant import Restaurant
+    from app.services.payment_service import PaymentService
+
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
+
     # Retrieve bill for order 1
     bill_res = client.get("/api/v1/billing/order/1")
     assert bill_res.status_code == 200
@@ -195,13 +205,25 @@ def test_billing_and_payment():
     assert "razorpay_order_id" in rzp_data
 
     import time
-    # Verify Razorpay payment
+    # Generate real HMAC-SHA256 signature against tenant's configured test secret
+    db = SessionLocal()
+    restaurant = db.query(Restaurant).filter(Restaurant.id == bill["restaurant_id"]).first()
+    secret = PaymentService.get_restaurant_credentials(restaurant)["key_secret"]
+    db.close()
+    assert secret
+
     unique_pay_id = f"pay_test_sandbox_{int(time.time() * 1000)}"
+    valid_sig = hmac.new(
+        secret.encode(),
+        f"{rzp_data['razorpay_order_id']}|{unique_pay_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
     verify_res = client.post("/api/v1/payments/verify-razorpay-payment", json={
         "bill_id": bill_id,
         "razorpay_order_id": rzp_data["razorpay_order_id"],
         "razorpay_payment_id": unique_pay_id,
-        "razorpay_signature": "signature_valid",
+        "razorpay_signature": valid_sig,
         "amount": bill["final_amount"]
     })
     assert verify_res.status_code == 200

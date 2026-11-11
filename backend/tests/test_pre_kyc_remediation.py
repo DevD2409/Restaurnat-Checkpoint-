@@ -200,8 +200,11 @@ def test_statutory_invoice_financial_year_transition():
 # 4. PAYMENT LIVE-KEY GUARD STANDARDIZED RESPONSES (HTTP 403)
 # =============================================================================
 
-def test_flow_a_live_key_guard_raises_403_forbidden():
+def test_flow_a_live_key_guard_raises_403_forbidden(monkeypatch):
     from fastapi import HTTPException
+
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
 
     mock_restaurant = Restaurant(
         id=999,
@@ -223,7 +226,10 @@ def test_flow_a_live_key_guard_raises_403_forbidden():
 def test_flow_b_live_key_guard_raises_403_forbidden(monkeypatch):
     from fastapi import HTTPException
 
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
     monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_live_platform_test_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_test_platform_secret_key")
     monkeypatch.setattr(settings, "LIVE_MODE_FLOW_B", False)
 
     mock_invoice = SubscriptionInvoice(

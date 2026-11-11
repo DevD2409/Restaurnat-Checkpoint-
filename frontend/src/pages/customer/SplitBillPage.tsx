@@ -89,32 +89,64 @@ export const SplitBillPage: React.FC = () => {
     }
   };
 
-  // Razorpay Sandbox Payment Simulation
+  // Razorpay Checkout Flow
   const handlePaySplitRazorpay = async (splitId?: number, amountToPay?: number) => {
     if (!bill) return;
     const payAmt = amountToPay || bill.final_amount;
     setPayingSplitId(splitId || -1);
 
     try {
-      // 1. Create order
+      // 1. Create authoritative Razorpay order on restaurant merchant account
       const rzpOrder = await billingApi.createRazorpayOrder(bill.id, payAmt);
+      const RazorpayCtor = (window as unknown as { Razorpay?: new (opts: Record<string, unknown>) => any }).Razorpay;
 
-      // 2. Simulate Razorpay Checkout Dialog & verification
-      const verifyRes = await billingApi.verifyRazorpayPayment({
-        bill_id: bill.id,
-        razorpay_order_id: rzpOrder.razorpay_order_id,
-        razorpay_payment_id: `pay_mock_${Date.now()}`,
-        razorpay_signature: 'signature_verified',
-        amount: payAmt,
-        split_id: splitId,
+      if (typeof RazorpayCtor !== 'function') {
+        alert('Razorpay Checkout SDK could not be loaded. Online verification requires an authentic Razorpay payment signature.');
+        return;
+      }
+
+      // 2. Open Razorpay Checkout and verify signed callback payload
+      const rzp = new RazorpayCtor({
+        key: rzpOrder.key_id,
+        amount: rzpOrder.amount_paise,
+        currency: rzpOrder.currency || 'INR',
+        order_id: rzpOrder.razorpay_order_id,
+        handler: async (response: {
+          razorpay_order_id: string;
+          razorpay_payment_id: string;
+          razorpay_signature: string;
+        }) => {
+          try {
+            await billingApi.verifyRazorpayPayment({
+              bill_id: bill.id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              amount: payAmt,
+              split_id: splitId,
+            });
+            setPaymentSuccessMsg(`Payment of ₹${payAmt} verified and recorded!`);
+            await fetchActiveBill();
+            setTimeout(() => setPaymentSuccessMsg(null), 4000);
+          } catch (verifyErr: any) {
+            alert(verifyErr?.response?.data?.detail || 'Payment signature verification failed.');
+          } finally {
+            setPayingSplitId(null);
+          }
+        },
+        modal: {
+          ondismiss: () => {
+            setPayingSplitId(null);
+          },
+        },
       });
-
-      setPaymentSuccessMsg(`Payment of ₹${payAmt} successfully processed via Razorpay Sandbox!`);
-      await fetchActiveBill();
-      setTimeout(() => setPaymentSuccessMsg(null), 4000);
-    } catch (err) {
-      alert('Payment failed or cancelled.');
-    } finally {
+      rzp.on('payment.failed', (resp: any) => {
+        alert(resp?.error?.description || 'Payment failed or cancelled.');
+        setPayingSplitId(null);
+      });
+      rzp.open();
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'Online payment is currently unavailable.');
       setPayingSplitId(null);
     }
   };

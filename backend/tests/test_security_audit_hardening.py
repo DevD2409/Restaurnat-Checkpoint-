@@ -90,11 +90,22 @@ def test_order_price_tampering_prevention():
     assert order["subtotal"] >= 380.0
     assert order["items"][0]["unit_price"] >= 380.0
 
-def test_webhook_signature_verification():
-    """Verify Razorpay webhook rejects missing or forged X-Razorpay-Signature."""
+def test_webhook_signature_verification(monkeypatch):
+    """Verify kill-switch blocks webhooks with 503 when disabled and signature check fails closed when enabled."""
     fake_payload = b'{"event": "payment.captured"}'
 
-    # Missing signature header
+    # 1. With default EMERGENCY_DISABLE_PAYMENTS=True, webhooks return 503 safely
+    disabled_resp = client.post(
+        "/api/v1/payments/webhook",
+        content=fake_payload,
+        headers={"Content-Type": "application/json"},
+    )
+    assert disabled_resp.status_code == 503
+
+    # 2. When payment flows are active, missing or forged X-Razorpay-Signature must fail with 400
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
+
     resp = client.post(
         "/api/v1/payments/webhook",
         content=fake_payload,
@@ -102,6 +113,14 @@ def test_webhook_signature_verification():
     )
     assert resp.status_code == 400
     assert "Missing X-Razorpay-Signature" in resp.json()["detail"]
+
+    forged_resp = client.post(
+        "/api/v1/payments/webhook",
+        content=fake_payload,
+        headers={"Content-Type": "application/json", "X-Razorpay-Signature": "forged_signature"},
+    )
+    assert forged_resp.status_code == 400
+    assert "Invalid webhook signature" in forged_resp.json()["detail"]
 
 def test_qr_token_max_age_and_tampering():
     """Verify that forged and expired QR tokens fail verification."""

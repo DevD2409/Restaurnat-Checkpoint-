@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { apiClient, serviceRequestApi } from '../services/api';
+import { resolveMediaUrl } from '../config/runtime';
 
 export const CustomerLayout: React.FC = () => {
   const { tenantSlug, qrToken } = useParams<{ tenantSlug?: string; qrToken?: string }>();
@@ -107,7 +108,7 @@ export const CustomerLayout: React.FC = () => {
           <Link to={basePath} className="flex items-center space-x-2.5">
             {restaurantProfile.logo_url ? (
               <img
-                src={restaurantProfile.logo_url}
+                src={resolveMediaUrl(restaurantProfile.logo_url)}
                 alt={restaurantProfile.name}
                 className="w-9 h-9 rounded-xl object-cover shadow-lg border border-zinc-700"
               />

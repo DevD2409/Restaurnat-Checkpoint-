@@ -351,6 +351,8 @@ def create_subscription_checkout(
     Creates an authoritative SaaS subscription receipt/invoice and Razorpay order
     strictly in integer paise under the Platform merchant account.
     """
+    PaymentService.ensure_payments_active("B")
+
     target_rest_id = data.restaurant_id
     if current_user.role != UserRole.PLATFORM_SUPER_ADMIN:
         target_rest_id = current_user.restaurant_id
@@ -453,6 +455,8 @@ def verify_subscription_payment(
     Activates or renews the subscription, creates receipt, records coupon redemption,
     and dispatches a renewal notification.
     """
+    PaymentService.ensure_payments_active("B")
+
     invoice = db.query(SubscriptionInvoice).filter(SubscriptionInvoice.id == data.invoice_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Subscription invoice not found")
@@ -558,6 +562,8 @@ async def platform_subscription_webhook(request: Request, db: Session = Depends(
     Dedicated signed webhook endpoint for SaaS Platform Subscriptions.
     Idempotent processing of renewals, charge failures, and cancellations.
     """
+    PaymentService.ensure_payments_active("B")
+
     raw_body = await request.body()
     signature = request.headers.get("X-Razorpay-Signature")
 
@@ -1036,6 +1042,8 @@ def refund_subscription(
     current_user: User = Depends(require_roles([UserRole.PLATFORM_SUPER_ADMIN]))
 ):
     """Super Admin privileged endpoint to issue refunds for SaaS subscriptions."""
+    PaymentService.ensure_payments_active("B")
+
     payment = db.query(SubscriptionPayment).filter(SubscriptionPayment.id == data.payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Subscription payment not found")

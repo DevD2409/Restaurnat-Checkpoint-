@@ -107,11 +107,17 @@ def test_configurable_owner_identity_and_domain(monkeypatch):
     assert data["is_support_email_configured"] is True
 
 
-def test_unregistered_direct_tax_inclusive_preview_and_checkout(role_tokens):
+def test_unregistered_direct_tax_inclusive_preview_and_checkout(monkeypatch, role_tokens):
     """
     When unregistered, ₹999 monthly and ₹9,999 yearly charge exact prices
     with 0 GST, 0 convenience fee, and generate Non-GST PAYMENT_RECEIPT (R{FY}/...).
     """
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_test_unit_platform_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_test_platform_secret_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_WEBHOOK_SECRET", "unit_test_platform_webhook_secret")
+
     # Monthly Preview
     prev_m = client.post("/api/v1/subscriptions/checkout/preview", json={"plan_code": "MONTHLY"})
     assert prev_m.status_code == 200
@@ -177,6 +183,11 @@ def test_gst_registered_ca_confirmed_tax_inclusive_split(monkeypatch, role_token
     - Yearly ₹9,999 (999,900 paise) -> taxable 847,373 + GST 152,527 = 999,900
     Issues TAX_INVOICE (I{FY}/...) and NEVER adds tax on top of ₹999 or ₹9,999.
     """
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_test_unit_platform_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_test_platform_secret_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_WEBHOOK_SECRET", "unit_test_platform_webhook_secret")
     monkeypatch.setattr(settings, "IS_GST_REGISTERED", True)
     monkeypatch.setattr(settings, "IS_GST_RATE_CA_CONFIRMED", True)
     monkeypatch.setattr(settings, "OWNER_GSTIN", "27AABCU9603R1ZP")
@@ -232,8 +243,14 @@ def test_gst_registered_without_ca_confirmation_stays_non_gst(monkeypatch):
     assert data["final_amount_paise"] == 99900
 
 
-def test_retired_pricing_coupons_blocked_everywhere(role_tokens):
+def test_retired_pricing_coupons_blocked_everywhere(monkeypatch, role_tokens):
     """MONTHLY999 and YEARLY9999 must be rejected across validation, preview, checkout, and superadmin APIs."""
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_test_unit_platform_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_test_platform_secret_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_WEBHOOK_SECRET", "unit_test_platform_webhook_secret")
+
     for legacy_code, plan_code in (("MONTHLY999", "MONTHLY"), ("YEARLY9999", "YEARLY")):
         # 1. Validation endpoint
         val_res = client.post(
@@ -274,13 +291,17 @@ def test_retired_pricing_coupons_blocked_everywhere(role_tokens):
 
 
 def test_flow_b_settlement_and_safety_flags():
-    """Confirm Flow A & Flow B live flags remain False and platform settlement separates from restaurants."""
+    """Confirm Flow A & Flow B fail-closed defaults and zero hardcoded platform payment credentials."""
     assert settings.LIVE_MODE_FLOW_A is False
     assert settings.LIVE_MODE_FLOW_B is False
-    assert settings.FLOW_A_ENABLED is True
-    assert settings.FLOW_B_ENABLED is True
+    assert settings.FLOW_A_ENABLED is False
+    assert settings.FLOW_B_ENABLED is False
+    assert settings.DISABLE_RESTAURANT_PAYMENT_FALLBACK is True
+    assert settings.EMERGENCY_DISABLE_PAYMENTS is True
 
     creds = PaymentService.get_platform_credentials()
-    assert creds["key_id"].startswith("rzp_test_")
+    assert creds["is_configured"] is False
+    assert creds["key_id"] is None
+    assert creds["key_secret"] is None
     assert "ACC_SRMP_CORP" not in str(creds["settlement_account"])
     assert "HDFC" not in str(creds["settlement_account"])

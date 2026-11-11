@@ -206,7 +206,13 @@ def test_checkout_preview_inspection():
     assert "billing_end_date" in data
 
 # 6. Test Per-Restaurant Coupon Limit and Misuse Prevention
-def test_per_restaurant_coupon_limit_enforcement(auth_tokens):
+def test_per_restaurant_coupon_limit_enforcement(monkeypatch, auth_tokens):
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_test_unit_coupon_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_coupon_platform_secret")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_WEBHOOK_SECRET", "unit_coupon_webhook_secret")
+
     db = SessionLocal()
     # Ensure fresh coupon with max_uses_per_restaurant = 1
     code = f"ONEOFF_{int(time.time())}"
@@ -259,7 +265,13 @@ def test_per_restaurant_coupon_limit_enforcement(auth_tokens):
     assert "already been redeemed by this restaurant" in checkout_res2.json()["detail"]
 
 # 7. Test Subscription Renewal Extends Existing Expiration
-def test_subscription_renewal_extends_expiration(auth_tokens):
+def test_subscription_renewal_extends_expiration(monkeypatch, auth_tokens):
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_test_unit_renew_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_renew_platform_secret")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_WEBHOOK_SECRET", "unit_renew_webhook_secret")
+
     db = SessionLocal()
     rest = db.query(Restaurant).filter(Restaurant.id == 2).first()
     future_date = datetime.now() + timedelta(days=20)

@@ -17,6 +17,18 @@ from app.core.security import create_access_token
 
 client = TestClient(app)
 
+
+@pytest.fixture(autouse=True)
+def enable_payment_flows_for_architecture_tests(monkeypatch):
+    """Enable Flow A & Flow B with ephemeral test-only secrets inside this suite."""
+    monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
+    monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
+    monkeypatch.setattr(settings, "FLOW_B_ENABLED", True)
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_ID", "rzp_test_unit_arch_platform_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_KEY_SECRET", "unit_arch_platform_secret_key")
+    monkeypatch.setattr(settings, "PLATFORM_RAZORPAY_WEBHOOK_SECRET", "unit_arch_platform_webhook_secret")
+
+
 @pytest.fixture
 def auth_tokens():
     db = SessionLocal()

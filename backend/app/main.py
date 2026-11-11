@@ -55,7 +55,7 @@ from app.routers.subscriptions import router as subscriptions_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # In development, create tables automatically if needed; staging/production run Alembic preDeployCommand.
+    # In development, create tables automatically if needed; staging/production run Alembic migrations (alembic upgrade head).
     if settings.ENVIRONMENT not in ("staging", "production"):
         Base.metadata.create_all(bind=engine)
 
@@ -142,7 +142,7 @@ app.include_router(feedback_router, prefix=settings.API_V1_STR)
 app.include_router(subscriptions_router, prefix=settings.API_V1_STR)
 
 # Static files directory for uploads and media
-STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
 os.makedirs(os.path.join(STATIC_DIR, "uploads", "feedback"), exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 

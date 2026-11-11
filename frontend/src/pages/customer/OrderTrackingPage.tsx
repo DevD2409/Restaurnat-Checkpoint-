@@ -9,6 +9,7 @@ import {
 import { orderApi, feedbackApi, restaurantApi } from '../../services/api';
 import { useWebSocket } from '../../context/WebSocketContext';
 import { Order, OrderStatus } from '../../types';
+import { resolveMediaUrl } from '../../config/runtime';
 
 export const OrderTrackingPage: React.FC = () => {
   const { orderId, qrToken } = useParams<{ orderId: string; qrToken: string }>();
@@ -514,7 +515,7 @@ export const OrderTrackingPage: React.FC = () => {
                   <div className="flex flex-wrap gap-2 items-center">
                     {uploadedPhotos.map((pUrl, idx) => (
                       <div key={idx} className="relative w-16 h-16 rounded-xl border border-zinc-700 overflow-hidden group">
-                        <img src={pUrl} alt="Dish photo" className="w-full h-full object-cover" />
+                        <img src={resolveMediaUrl(pUrl)} alt="Dish photo" className="w-full h-full object-cover" />
                         <button
                           type="button"
                           onClick={() => handleRemovePhoto(idx)}

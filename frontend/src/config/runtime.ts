@@ -68,3 +68,31 @@ export function getWsBaseUrl(): string {
   warnOnceIfUnconfigured();
   return '';
 }
+
+export function getBackendOrigin(): string {
+  const apiBase = getApiBaseUrl();
+  if (/^https?:\/\//i.test(apiBase)) {
+    return apiBase.replace(/\/api\/v1\/?$/i, '').replace(/\/+$/, '');
+  }
+  return '';
+}
+
+/**
+ * Resolves backend-relative `/static/...` media URLs against the configured backend origin
+ * so cross-origin frontend deployments (e.g. Firebase Hosting + Render) load uploaded assets cleanly.
+ */
+export function resolveMediaUrl(url?: string | null): string {
+  const trimmed = url?.trim();
+  if (!trimmed) {
+    return '';
+  }
+  if (/^(https?:|data:|blob:|\/\/)/i.test(trimmed)) {
+    return trimmed;
+  }
+  const normalizedPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  if (normalizedPath.startsWith('/static/')) {
+    const origin = getBackendOrigin();
+    return origin ? `${origin}${normalizedPath}` : normalizedPath;
+  }
+  return trimmed;
+}

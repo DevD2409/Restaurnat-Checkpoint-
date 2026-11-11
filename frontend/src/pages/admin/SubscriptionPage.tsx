@@ -183,21 +183,10 @@ export const SubscriptionPage: React.FC = () => {
         });
         rzp.open();
       } else {
-        // Fallback simulation for sandbox environments without external scripts
-        const simPaymentId = `pay_mock_${Date.now()}`;
-        const verifyRes = await subscriptionsApi.verifyPayment({
-          invoice_id: checkoutRes.invoice_id,
-          razorpay_order_id: checkoutRes.razorpay_order_id,
-          razorpay_payment_id: simPaymentId,
-          razorpay_signature: 'test_signature_valid'
+        setActionMessage({
+          type: 'error',
+          text: 'Razorpay Checkout SDK could not be loaded. Online subscription verification requires an authentic Razorpay payment signature.'
         });
-        if (verifyRes.success) {
-          setActionMessage({
-            type: 'success',
-            text: `Subscription successfully renewed! New expiration: ${new Date(verifyRes.expires_at).toLocaleDateString()}`
-          });
-          await loadData();
-        }
         setIsProcessing(false);
       }
     } catch (err: any) {
