@@ -7,7 +7,7 @@ class MenuCategory(Base):
     __tablename__ = "menu_categories"
 
     id = Column(Integer, primary_key=True, index=True)
-    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), default=1, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), default=1, index=True, nullable=False)
     name = Column(String(100), nullable=False)
     description = Column(Text, nullable=True)
     icon = Column(String(50), default="Utensils")  # Lucide icon name
@@ -15,12 +15,14 @@ class MenuCategory(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    restaurant = relationship("Restaurant", back_populates="menu_categories")
     items = relationship("MenuItem", back_populates="category", cascade="all, delete-orphan")
 
 class MenuItem(Base):
     __tablename__ = "menu_items"
 
     id = Column(Integer, primary_key=True, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), default=1, index=True, nullable=False)
     category_id = Column(Integer, ForeignKey("menu_categories.id"), nullable=False, index=True)
     name = Column(String(200), nullable=False, index=True)
     description = Column(Text, nullable=True)
@@ -62,4 +64,3 @@ class MenuCustomizationOption(Base):
     is_default = Column(Boolean, default=False)
 
     group = relationship("MenuCustomizationGroup", back_populates="options")
-

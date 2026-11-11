@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -70,14 +70,40 @@ class Payment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     bill_id = Column(Integer, ForeignKey("bills.id"), nullable=False, index=True)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), default=1, index=True)
     amount = Column(Float, nullable=False)
+    currency = Column(String(10), default="INR")
     payment_method = Column(SQLEnum(PaymentMethod), default=PaymentMethod.RAZORPAY, nullable=False)
     transaction_id = Column(String(100), unique=True, index=True, nullable=True)
     razorpay_order_id = Column(String(100), nullable=True, index=True)
-    razorpay_payment_id = Column(String(100), nullable=True)
+    razorpay_payment_id = Column(String(100), nullable=True, index=True)
     razorpay_signature = Column(String(255), nullable=True)
     status = Column(SQLEnum(PaymentRecordStatus), default=PaymentRecordStatus.PENDING, nullable=False)
+    
+    # Audit, Failure & Settlement Tracking
+    error_code = Column(String(100), nullable=True)
+    error_description = Column(String(255), nullable=True)
+    settlement_status = Column(String(50), default="PENDING")  # PENDING, SETTLED
+    settlement_id = Column(String(100), nullable=True)
+    transfer_id = Column(String(100), nullable=True)  # Razorpay Route transfer identifier
+    refund_id = Column(String(100), nullable=True)
+    refund_amount = Column(Float, default=0.0)
+    refunded_at = Column(DateTime(timezone=True), nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     bill = relationship("Bill", back_populates="payments")
+
+class PaymentWebhookEvent(Base):
+    __tablename__ = "payment_webhook_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(String(100), unique=True, index=True, nullable=False)
+    event_type = Column(String(100), nullable=False)
+    restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=True, index=True)
+    entity_id = Column(String(100), nullable=True, index=True)
+    status = Column(String(50), default="PROCESSED")  # PROCESSED, FAILED, IGNORED
+    payload = Column(Text, nullable=True)
+    processed_at = Column(DateTime(timezone=True), server_default=func.now())
+
 

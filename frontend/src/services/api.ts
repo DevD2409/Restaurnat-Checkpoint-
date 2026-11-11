@@ -1,11 +1,13 @@
 import axios from 'axios';
+import { getApiBaseUrl } from '../config/runtime';
 import {
   User, Restaurant, Table, MenuCategory, MenuItem,
   Order, ServiceRequest, Reservation, Bill, BillSplit,
-  AnalyticsResponse, ServiceRequestStatus, OrderStatus
+  AnalyticsResponse, ServiceRequestStatus, OrderStatus,
+  Feedback, FeedbackAnalytics
 } from '../types';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const API_BASE = getApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
@@ -22,6 +24,23 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// Reject HTML SPA-fallback responses cleanly so unconfigured hosts fail softly instead of crashing callers expecting JSON arrays/objects
+apiClient.interceptors.response.use(
+  (response) => {
+    const contentType = String(response.headers?.['content-type'] || '');
+    if (
+      contentType.includes('text/html') ||
+      (typeof response.data === 'string' && /^\s*<!doctype\s+html/i.test(response.data))
+    ) {
+      return Promise.reject(
+        new Error('Backend API returned HTML instead of JSON. Configure VITE_API_URL to point to the backend server.')
+      );
+    }
+    return response;
+  },
+  (error) => Promise.reject(error)
+);
 
 // Auth & Staff API
 export const authApi = {
@@ -53,8 +72,10 @@ export const authApi = {
 
 // Restaurant Profile API
 export const restaurantApi = {
-  getProfile: async () => {
-    const res = await apiClient.get<Restaurant>('/restaurants/');
+  getProfile: async (restaurantId?: number) => {
+    const res = await apiClient.get<Restaurant>('/restaurants/', {
+      params: restaurantId ? { restaurant_id: restaurantId } : undefined
+    });
     return res.data;
   },
   updateProfile: async (data: Partial<Restaurant>) => {
@@ -252,6 +273,156 @@ export const billingApi = {
       amount,
       payment_method: paymentMethod
     });
+    return res.data;
+  },
+  refundPayment: async (paymentId: number, amount?: number, reason?: string) => {
+    const res = await apiClient.post('/payments/refund', {
+      payment_id: paymentId,
+      amount,
+      reason
+    });
+    return res.data;
+  },
+  reconcile: async (billId: number) => {
+    const res = await apiClient.get(`/payments/reconcile/${billId}`);
+    return res.data;
+  },
+};
+
+// Subscriptions & SaaS Ledger API (Flow B)
+export const subscriptionsApi = {
+  getComplianceInfo: async () => {
+    const res = await apiClient.get('/subscriptions/compliance/info');
+    return res.data;
+  },
+  getPlans: async () => {
+    const res = await apiClient.get('/subscriptions/plans');
+    return res.data;
+  },
+  validateCoupon: async (code: string, planCode: string, restaurantId?: number) => {
+    const res = await apiClient.post('/subscriptions/coupons/validate', {
+      code,
+      plan_code: planCode,
+      restaurant_id: restaurantId
+    });
+    return res.data;
+  },
+  previewCheckout: async (planCode: string, couponCode?: string, restaurantId?: number) => {
+    const res = await apiClient.post('/subscriptions/checkout/preview', {
+      plan_code: planCode,
+      coupon_code: couponCode,
+      restaurant_id: restaurantId
+    });
+    return res.data;
+  },
+  checkout: async (data: {
+    restaurant_id?: number;
+    plan_code: string;
+    coupon_code?: string;
+  }) => {
+    const res = await apiClient.post('/subscriptions/checkout', data);
+    return res.data;
+  },
+  verifyPayment: async (data: {
+    invoice_id: number;
+    razorpay_order_id: string;
+    razorpay_payment_id: string;
+    razorpay_signature: string;
+  }) => {
+    const res = await apiClient.post('/subscriptions/verify', data);
+    return res.data;
+  },
+  getMyStatus: async () => {
+    const res = await apiClient.get('/subscriptions/my-status');
+    return res.data;
+  },
+  getInvoices: async () => {
+    const res = await apiClient.get('/subscriptions/invoices');
+    return res.data;
+  },
+  getNotifications: async () => {
+    const res = await apiClient.get('/subscriptions/notifications');
+    return res.data;
+  },
+  getAdminAnalytics: async () => {
+    const res = await apiClient.get('/subscriptions/admin/analytics');
+    return res.data;
+  },
+  createPlan: async (planData: any) => {
+    const res = await apiClient.post('/subscriptions/admin/plans', planData);
+    return res.data;
+  },
+  togglePlan: async (planId: number, isActive: boolean) => {
+    const res = await apiClient.patch(`/subscriptions/admin/plans/${planId}?is_active=${isActive}`);
+    return res.data;
+  },
+  listCoupons: async () => {
+    const res = await apiClient.get('/subscriptions/admin/coupons');
+    return res.data;
+  },
+  createCoupon: async (couponData: any) => {
+    const res = await apiClient.post('/subscriptions/admin/coupons', couponData);
+    return res.data;
+  },
+  toggleCoupon: async (couponId: number, isActive: boolean) => {
+    const res = await apiClient.patch(`/subscriptions/admin/coupons/${couponId}?is_active=${isActive}`);
+    return res.data;
+  },
+  evaluateExpiries: async () => {
+    const res = await apiClient.post('/subscriptions/admin/evaluate-expiries');
+    return res.data;
+  },
+  refund: async (paymentId: number, amountPaise?: number, reason?: string) => {
+    const res = await apiClient.post('/subscriptions/refund', {
+      payment_id: paymentId,
+      amount_paise: amountPaise,
+      reason
+    });
+    return res.data;
+  },
+};
+
+// Feedback & Rating API
+export const feedbackApi = {
+  submit: async (data: any) => {
+    const res = await apiClient.post<Feedback>('/feedback/', data);
+    return res.data;
+  },
+  uploadPhoto: async (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const res = await apiClient.post('/feedback/upload-photo', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+    return res.data;
+  },
+  getPublic: async (restaurantId: number) => {
+    const res = await apiClient.get<Feedback[]>(`/feedback/restaurant/${restaurantId}`);
+    return res.data;
+  },
+  list: async (params?: {
+    restaurant_id?: number;
+    status_filter?: string;
+    min_rating?: number;
+    max_rating?: number;
+  }) => {
+    const res = await apiClient.get<Feedback[]>('/feedback/', { params });
+    return res.data;
+  },
+  getAnalytics: async (restaurantId?: number) => {
+    const res = await apiClient.get<FeedbackAnalytics>('/feedback/analytics', {
+      params: { restaurant_id: restaurantId }
+    });
+    return res.data;
+  },
+  moderate: async (id: number, data: { status: string; flag_reason?: string; is_published?: boolean }) => {
+    const res = await apiClient.patch<Feedback>(`/feedback/${id}/moderate`, data);
+    return res.data;
+  },
+  report: async (id: number, reason: string) => {
+    const res = await apiClient.post(`/feedback/${id}/report`, { reason });
     return res.data;
   },
 };

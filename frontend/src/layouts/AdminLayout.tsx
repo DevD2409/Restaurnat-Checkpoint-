@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, TrendingUp, UtensilsCrossed, Grid,
   Users, CalendarCheck, Receipt, Settings, ChefHat,
-  Bell, LogOut, ShieldCheck, ExternalLink, Menu, X
+  Bell, LogOut, ShieldCheck, ExternalLink, Menu, X, Sparkles, Globe, Star
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -30,6 +30,8 @@ export const AdminLayout: React.FC = () => {
     { label: 'Floor & Tables', path: '/admin/tables', icon: Grid },
     { label: 'Reservations', path: '/admin/reservations', icon: CalendarCheck },
     { label: 'Billing & Invoices', path: '/admin/billing', icon: Receipt },
+    { label: 'Customer Reviews', path: '/admin/feedback', icon: Star },
+    { label: 'SaaS Subscription', path: '/admin/subscription', icon: Sparkles },
     { label: 'Staff & Roles', path: '/admin/staff', icon: Users },
     { label: 'Restaurant Settings', path: '/admin/settings', icon: Settings },
   ];
@@ -97,6 +99,15 @@ export const AdminLayout: React.FC = () => {
                     <span>Staff Portal</span>
                   </Link>
                 </div>
+                {user?.role === 'PLATFORM_SUPER_ADMIN' && (
+                  <Link
+                    to="/platform"
+                    className="flex items-center justify-center space-x-2 px-3 py-2 rounded-xl bg-amber-500/15 text-amber-300 text-xs font-bold border border-amber-500/30"
+                  >
+                    <Globe className="w-4 h-4 text-amber-400" />
+                    <span>Platform Super Admin</span>
+                  </Link>
+                )}
               </div>
 
               {/* Navigation Links */}
@@ -188,6 +199,15 @@ export const AdminLayout: React.FC = () => {
               <span>Staff / Floor</span>
             </Link>
           </div>
+          {user?.role === 'PLATFORM_SUPER_ADMIN' && (
+            <Link
+              to="/platform"
+              className="flex items-center justify-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs border border-amber-500/30 transition font-bold"
+            >
+              <Globe className="w-3.5 h-3.5 text-amber-400" />
+              <span>Platform Super Admin</span>
+            </Link>
+          )}
         </div>
 
         {/* Navigation Links */}

@@ -79,6 +79,21 @@ class BillResponse(BaseModel):
     splits: List[BillSplitResponse] = []
     payments: List[PaymentResponse] = []
 
+class PaymentRefundRequest(BaseModel):
+    payment_id: int
+    amount: Optional[float] = None
+    reason: Optional[str] = "Customer refund request"
+
+class PaymentReconciliationResponse(BaseModel):
+    bill_id: int
+    bill_number: str
+    bill_final_amount: float
+    total_recorded_paid: float
+    bill_status: str
+    is_balanced: bool
+    payments_count: int
+
+
     class Config:
         from_attributes = True
 

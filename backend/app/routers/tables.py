@@ -4,12 +4,13 @@ import uuid
 from typing import List, Optional
 from datetime import datetime, timezone
 import qrcode
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.security import generate_table_qr_token, verify_table_qr_token
-from app.core.dependencies import require_roles
+from app.core.security import generate_table_qr_token, verify_table_qr_token, decode_access_token
+from app.core.dependencies import require_roles, oauth2_scheme
 from app.models.user import User, UserRole
+from app.models.restaurant import Restaurant
 from app.models.table import Table, TableSession, TableStatus
 from app.models.order import Order, OrderStatus
 from app.models.billing import Bill, BillStatus
@@ -21,12 +22,44 @@ from app.websocket.connection_manager import manager
 
 router = APIRouter(prefix="/tables", tags=["Tables & Floor Management"])
 
+STAFF_ROLES = [
+    UserRole.PLATFORM_SUPER_ADMIN,
+    UserRole.RESTAURANT_OWNER,
+    UserRole.ADMIN,
+    UserRole.RESTAURANT_MANAGER,
+    UserRole.MANAGER,
+    UserRole.WAITER,
+    UserRole.CASHIER
+]
+
 @router.get("/", response_model=List[TableResponse])
-def get_tables(db: Session = Depends(get_db)):
-    tables = db.query(Table).filter(Table.is_active == True).order_by(Table.table_number.asc()).all()
+def get_tables(
+    restaurant_id: Optional[int] = Query(None),
+    slug: Optional[str] = Query(None),
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: Session = Depends(get_db)
+):
+    target_id = restaurant_id
+    if slug:
+        r = db.query(Restaurant).filter(Restaurant.slug == slug).first()
+        if r:
+            target_id = r.id
+    elif token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user and user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
+                target_id = user.restaurant_id
+
+    query = db.query(Table).filter(Table.is_active == True)
+    if target_id is not None:
+        query = query.filter(Table.restaurant_id == target_id)
+    else:
+        query = query.filter(Table.restaurant_id == 1)
+
+    tables = query.order_by(Table.table_number.asc()).all()
     results = []
     for t in tables:
-        # Check active session and current active bill / order
         active_session = db.query(TableSession).filter(
             TableSession.table_id == t.id,
             TableSession.is_active == True
@@ -67,15 +100,31 @@ def get_tables(db: Session = Depends(get_db)):
 async def create_table(
     table_data: TableCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
+    current_user: User = Depends(require_roles([
+        UserRole.PLATFORM_SUPER_ADMIN,
+        UserRole.RESTAURANT_OWNER,
+        UserRole.ADMIN,
+        UserRole.RESTAURANT_MANAGER,
+        UserRole.MANAGER
+    ]))
 ):
-    existing = db.query(Table).filter(Table.table_number == table_data.table_number).first()
+    target_id = current_user.restaurant_id
+    if current_user.role == UserRole.PLATFORM_SUPER_ADMIN and table_data.restaurant_id:
+        target_id = table_data.restaurant_id
+    if not target_id:
+        target_id = 1
+
+    existing = db.query(Table).filter(
+        Table.restaurant_id == target_id,
+        Table.table_number == table_data.table_number
+    ).first()
     if existing:
-        raise HTTPException(status_code=400, detail="Table number already exists")
+        raise HTTPException(status_code=400, detail=f"Table number '{table_data.table_number}' already exists in this restaurant")
 
     new_table = Table(
-        restaurant_id=table_data.restaurant_id,
+        restaurant_id=target_id,
         table_number=table_data.table_number,
+        service_type=getattr(table_data, "service_type", "TABLE"),
         capacity=table_data.capacity,
         section=table_data.section,
         status=table_data.status,
@@ -87,7 +136,7 @@ async def create_table(
     db.commit()
     db.refresh(new_table)
 
-    # Generate tamper-proof QR token
+    # Generate tamper-proof signed QR token scoped to restaurant_id
     token = generate_table_qr_token(new_table.restaurant_id, new_table.id, new_table.table_number)
     new_table.qr_token = token
     db.commit()
@@ -96,8 +145,9 @@ async def create_table(
     await manager.broadcast_event("TABLE_CREATED", {
         "table_id": new_table.id,
         "table_number": new_table.table_number,
+        "restaurant_id": new_table.restaurant_id,
         "status": new_table.status.value
-    })
+    }, restaurant_id=new_table.restaurant_id)
 
     return TableResponse(
         id=new_table.id,
@@ -117,11 +167,17 @@ async def update_table(
     table_id: int,
     table_update: TableUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER, UserRole.WAITER]))
+    current_user: User = Depends(require_roles(STAFF_ROLES))
 ):
     table = db.query(Table).filter(Table.id == table_id).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and table.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot modify table of another restaurant"
+        )
 
     update_dict = table_update.model_dump(exclude_unset=True)
     status_changed = False
@@ -138,8 +194,9 @@ async def update_table(
         await manager.broadcast_event("TABLE_STATUS_CHANGED", {
             "table_id": table.id,
             "table_number": table.table_number,
+            "restaurant_id": table.restaurant_id,
             "status": table.status.value
-        })
+        }, restaurant_id=table.restaurant_id)
 
     return TableResponse(
         id=table.id,
@@ -172,13 +229,11 @@ def validate_qr_token(req: QRValidationRequest, db: Session = Depends(get_db)):
     if not table:
         raise HTTPException(status_code=404, detail="Assigned table not found")
 
-    # Find or auto-create an active session for the customer
     active_session = db.query(TableSession).filter(
         TableSession.table_id == table.id,
         TableSession.is_active == True
     ).first()
 
-    # If table is Available or Cleaning, close any prior session and create a fresh one
     if table.status in [TableStatus.AVAILABLE, TableStatus.CLEANING] and active_session:
         active_session.is_active = False
         active_session.ended_at = datetime.now(timezone.utc)
@@ -237,8 +292,9 @@ async def create_table_session(
     await manager.broadcast_event("TABLE_OCCUPIED", {
         "table_id": table.id,
         "table_number": table.table_number,
+        "restaurant_id": table.restaurant_id,
         "customer_name": session.customer_name
-    })
+    }, restaurant_id=table.restaurant_id)
 
     return TableSessionResponse(
         id=session.id,
@@ -256,11 +312,17 @@ async def create_table_session(
 async def end_table_session(
     table_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER, UserRole.WAITER, UserRole.CASHIER]))
+    current_user: User = Depends(require_roles(STAFF_ROLES))
 ):
     table = db.query(Table).filter(Table.id == table_id).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
+
+    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and table.restaurant_id != current_user.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: Cannot end table session of another restaurant"
+        )
 
     active_sessions = db.query(TableSession).filter(
         TableSession.table_id == table_id,
@@ -278,8 +340,9 @@ async def end_table_session(
     await manager.broadcast_event("TABLE_FREED", {
         "table_id": table.id,
         "table_number": table.table_number,
+        "restaurant_id": table.restaurant_id,
         "status": "Available"
-    })
+    }, restaurant_id=table.restaurant_id)
 
     return {"message": f"Table {table.table_number} session ended. Table is now available."}
 
@@ -289,12 +352,9 @@ def get_table_qr_image(table_id: int, db: Session = Depends(get_db)):
     if not table or not table.qr_token:
         raise HTTPException(status_code=404, detail="Table or QR token not found")
 
-    # Generate QR Code directing to the customer app URL
-    # Format: /table/{qr_token}
     qr_data = f"/table/{table.qr_token}"
     img = qrcode.make(qr_data)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="image/png")
-

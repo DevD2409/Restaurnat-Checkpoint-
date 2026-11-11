@@ -1,11 +1,13 @@
 from typing import List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
+from app.core.dependencies import oauth2_scheme, require_roles
+from app.core.security import decode_access_token
 from app.models.service_request import ServiceRequest, ServiceRequestType, ServiceRequestStatus
 from app.models.table import Table, TableStatus
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.service_request import (
     ServiceRequestCreate, ServiceRequestStatusUpdate, ServiceRequestResponse
 )
@@ -22,8 +24,10 @@ async def create_service_request(
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
+    target_restaurant_id = table.restaurant_id
+
     new_req = ServiceRequest(
-        restaurant_id=req_data.restaurant_id,
+        restaurant_id=target_restaurant_id,
         table_id=req_data.table_id,
         request_type=req_data.request_type,
         status=ServiceRequestStatus.PENDING,
@@ -31,25 +35,24 @@ async def create_service_request(
     )
     db.add(new_req)
 
-    # If request is for Bill, update table status
     if req_data.request_type == ServiceRequestType.BILL:
         table.status = TableStatus.BILL_REQUESTED
 
     db.commit()
     db.refresh(new_req)
 
-    # Broadcast event via WebSocket
     await manager.broadcast_event(
         "SERVICE_REQUEST_CREATED",
         {
             "id": new_req.id,
             "table_id": new_req.table_id,
             "table_number": table.table_number,
+            "restaurant_id": target_restaurant_id,
             "request_type": new_req.request_type.value,
             "customer_notes": new_req.customer_notes,
             "created_at": new_req.created_at.isoformat()
         },
-        table_id=new_req.table_id
+        restaurant_id=target_restaurant_id
     )
 
     return ServiceRequestResponse(
@@ -67,12 +70,28 @@ async def create_service_request(
 def get_service_requests(
     status: Optional[ServiceRequestStatus] = None,
     table_id: Optional[int] = None,
+    restaurant_id: Optional[int] = Query(None),
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
     query = db.query(ServiceRequest).options(
         joinedload(ServiceRequest.table),
         joinedload(ServiceRequest.assigned_staff)
     )
+
+    target_id = restaurant_id
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user:
+                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
+                    target_id = user.restaurant_id
+
+    if target_id is not None:
+        query = query.filter(ServiceRequest.restaurant_id == target_id)
+    else:
+        query = query.filter(ServiceRequest.restaurant_id == 1)
 
     if status:
         query = query.filter(ServiceRequest.status == status)
@@ -105,6 +124,7 @@ def get_service_requests(
 async def update_service_request_status(
     request_id: int,
     status_update: ServiceRequestStatusUpdate,
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(get_db)
 ):
     req = db.query(ServiceRequest).options(
@@ -114,6 +134,17 @@ async def update_service_request_status(
 
     if not req:
         raise HTTPException(status_code=404, detail="Service request not found")
+
+    if token:
+        payload = decode_access_token(token)
+        if payload and payload.get("sub"):
+            user = db.query(User).filter(User.id == int(payload["sub"])).first()
+            if user and user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
+                if req.restaurant_id != user.restaurant_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Access denied: Cannot update service request of another restaurant"
+                    )
 
     req.status = status_update.status
     if status_update.staff_notes is not None:
@@ -130,19 +161,19 @@ async def update_service_request_status(
     db.commit()
     db.refresh(req)
 
-    # Broadcast event via WebSocket
     await manager.broadcast_event(
         "SERVICE_REQUEST_UPDATED",
         {
             "id": req.id,
             "table_id": req.table_id,
             "table_number": req.table.table_number if req.table else None,
+            "restaurant_id": req.restaurant_id,
             "request_type": req.request_type.value,
             "status": req.status.value,
             "staff_notes": req.staff_notes,
             "assigned_staff_name": req.assigned_staff.full_name if req.assigned_staff else None
         },
-        table_id=req.table_id
+        restaurant_id=req.restaurant_id
     )
 
     return ServiceRequestResponse(
@@ -160,4 +191,3 @@ async def update_service_request_status(
         acknowledged_at=req.acknowledged_at,
         resolved_at=req.resolved_at
     )
-

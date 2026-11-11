@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 from fastapi import WebSocket
 
 logger = logging.getLogger("websocket")
@@ -12,94 +12,136 @@ class ConnectionManager:
             "kitchen": set(),
             "staff": set(),
             "admin": set(),
+            "general": set()
         }
-        # table_id -> Set[WebSocket]
-        self.table_rooms: Dict[int, Set[WebSocket]] = {}
+        # "{restaurant_id}:{table_id}" -> Set[WebSocket]
+        self.table_rooms: Dict[str, Set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, channel: str = "general", table_id: int = None):
+    async def connect(
+        self,
+        websocket: WebSocket,
+        channel: str = "general",
+        restaurant_id: Optional[int] = 1,
+        table_id: Optional[int] = None
+    ):
         await websocket.accept()
+        r_id = restaurant_id or 1
         if table_id is not None:
-            if table_id not in self.table_rooms:
-                self.table_rooms[table_id] = set()
-            self.table_rooms[table_id].add(websocket)
-            logger.info(f"WebSocket connected to table_{table_id}")
+            room_key = f"{r_id}:{table_id}"
+            if room_key not in self.table_rooms:
+                self.table_rooms[room_key] = set()
+            self.table_rooms[room_key].add(websocket)
+            logger.info(f"WebSocket connected to table {table_id} for tenant {r_id}")
         else:
-            if channel not in self.rooms:
-                self.rooms[channel] = set()
-            self.rooms[channel].add(websocket)
-            logger.info(f"WebSocket connected to channel '{channel}'")
+            # Multi-tenant isolated room
+            tenant_room = f"tenant_{r_id}_{channel}"
+            if tenant_room not in self.rooms:
+                self.rooms[tenant_room] = set()
+            self.rooms[tenant_room].add(websocket)
 
-    def disconnect(self, websocket: WebSocket, channel: str = "general", table_id: int = None):
-        if table_id is not None and table_id in self.table_rooms:
-            self.table_rooms[table_id].discard(websocket)
-            if not self.table_rooms[table_id]:
-                del self.table_rooms[table_id]
-        elif channel in self.rooms:
-            self.rooms[channel].discard(websocket)
+            # Global room fallback for backward compatibility
+            if channel in self.rooms:
+                self.rooms[channel].add(websocket)
+            logger.info(f"WebSocket connected to channel '{tenant_room}'")
 
-    async def broadcast_to_channel(self, channel: str, message: dict):
-        if channel in self.rooms:
-            payload = json.dumps(message)
-            stale_connections = []
-            for ws in list(self.rooms[channel]):
-                try:
-                    await ws.send_text(payload)
-                except Exception as e:
-                    logger.warning(f"Error sending message to ws in channel {channel}: {e}")
-                    stale_connections.append(ws)
-            for dead_ws in stale_connections:
+    def disconnect(
+        self,
+        websocket: WebSocket,
+        channel: str = "general",
+        restaurant_id: Optional[int] = 1,
+        table_id: Optional[int] = None
+    ):
+        r_id = restaurant_id or 1
+        if table_id is not None:
+            room_key = f"{r_id}:{table_id}"
+            if room_key in self.table_rooms:
+                self.table_rooms[room_key].discard(websocket)
+                if not self.table_rooms[room_key]:
+                    del self.table_rooms[room_key]
+        else:
+            tenant_room = f"tenant_{r_id}_{channel}"
+            if tenant_room in self.rooms:
+                self.rooms[tenant_room].discard(websocket)
+            if channel in self.rooms:
+                self.rooms[channel].discard(websocket)
+
+    async def broadcast_to_channel(self, channel: str, message: dict, restaurant_id: Optional[int] = None):
+        """Broadcasts event strictly to tenant subscribers while supporting global fallback."""
+        payload = json.dumps(message)
+        recipients = set()
+        
+        if restaurant_id is not None:
+            tenant_room = f"tenant_{restaurant_id}_{channel}"
+            if tenant_room in self.rooms:
+                recipients.update(self.rooms[tenant_room])
+        
+        # If no specific tenant room or global broadcast
+        if not recipients and channel in self.rooms:
+            recipients.update(self.rooms[channel])
+
+        stale_connections = []
+        for ws in list(recipients):
+            try:
+                await ws.send_text(payload)
+            except Exception as e:
+                logger.warning(f"Error sending message to ws: {e}")
+                stale_connections.append(ws)
+
+        for dead_ws in stale_connections:
+            if restaurant_id is not None:
+                tenant_room = f"tenant_{restaurant_id}_{channel}"
+                if tenant_room in self.rooms:
+                    self.rooms[tenant_room].discard(dead_ws)
+            if channel in self.rooms:
                 self.rooms[channel].discard(dead_ws)
 
-    async def broadcast_to_table(self, table_id: int, message: dict):
-        if table_id in self.table_rooms:
-            payload = json.dumps(message)
-            stale_connections = []
-            for ws in list(self.table_rooms[table_id]):
-                try:
-                    await ws.send_text(payload)
-                except Exception as e:
-                    logger.warning(f"Error sending message to table_{table_id}: {e}")
-                    stale_connections.append(ws)
-            for dead_ws in stale_connections:
-                self.table_rooms[table_id].discard(dead_ws)
+    async def broadcast_to_table(self, table_id: int, message: dict, restaurant_id: Optional[int] = 1):
+        r_id = restaurant_id or 1
+        room_key = f"{r_id}:{table_id}"
+        recipients = set()
+        if room_key in self.table_rooms:
+            recipients.update(self.table_rooms[room_key])
 
-    async def broadcast_event(self, event_type: str, data: dict, table_id: int = None):
-        """
-        Universal event dispatcher:
-        - Sends to kitchen channel if relevant to orders
-        - Sends to staff channel if relevant to orders or service requests
-        - Sends to admin channel for operational KPIs
-        - Sends to table_id if table-specific
-        """
-        message = {
+        # Backward compatibility fallback
+        if not recipients and str(table_id) in self.table_rooms:
+            recipients.update(self.table_rooms[str(table_id)])
+
+        payload = json.dumps(message)
+        stale = []
+        for ws in list(recipients):
+            try:
+                await ws.send_text(payload)
+            except Exception as e:
+                logger.warning(f"Error sending to table {table_id}: {e}")
+                stale.append(ws)
+
+        for dead_ws in stale:
+            if room_key in self.table_rooms:
+                self.table_rooms[room_key].discard(dead_ws)
+
+    async def broadcast_event(self, event_type: str, data: dict, table_id: Optional[int] = None, restaurant_id: Optional[int] = 1):
+        """High-level event dispatcher that fans out to kitchen, waiter, admin, and optionally table."""
+        msg = {
             "type": event_type,
             "data": data
         }
-        
-        # Broadcast to specific table if provided
+        await self.broadcast_to_channel("kitchen", msg, restaurant_id=restaurant_id)
+        await self.broadcast_to_channel("staff", msg, restaurant_id=restaurant_id)
+        await self.broadcast_to_channel("admin", msg, restaurant_id=restaurant_id)
         if table_id:
-            await self.broadcast_to_table(table_id, message)
-        
-        # Order updates go to kitchen, staff, and admin
-        if event_type.startswith("ORDER_"):
-            await self.broadcast_to_channel("kitchen", message)
-            await self.broadcast_to_channel("staff", message)
-            await self.broadcast_to_channel("admin", message)
-            
-        # Service requests go to staff and admin
-        elif event_type.startswith("REQUEST_") or event_type.startswith("SERVICE_"):
-            await self.broadcast_to_channel("staff", message)
-            await self.broadcast_to_channel("admin", message)
-            
-        # Table status updates go to staff and admin
-        elif event_type.startswith("TABLE_"):
-            await self.broadcast_to_channel("staff", message)
-            await self.broadcast_to_channel("admin", message)
+            await self.broadcast_to_table(table_id, msg, restaurant_id=restaurant_id)
 
-        # Payment updates go to admin, staff, and table
-        elif event_type.startswith("PAYMENT_"):
-            await self.broadcast_to_channel("admin", message)
-            await self.broadcast_to_channel("staff", message)
+    async def broadcast_tenant_event(self, restaurant_id: int, event_type: str, data: dict, channel: str = "general", table_id: Optional[int] = None):
+        """Broadcasts event scoped to a specific tenant and channel/table."""
+        msg = {
+            "type": event_type,
+            "data": data
+        }
+        if channel in ("general", "all"):
+            await self.broadcast_event(event_type, data, table_id=table_id, restaurant_id=restaurant_id)
+        else:
+            await self.broadcast_to_channel(channel, msg, restaurant_id=restaurant_id)
+            if table_id:
+                await self.broadcast_to_table(table_id, msg, restaurant_id=restaurant_id)
 
 manager = ConnectionManager()
-

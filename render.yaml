@@ -1,0 +1,144 @@
+# ==============================================================================
+# SRMP Multi-Tenant SaaS - Render Blueprint (Infrastructure-as-Code)
+# Target: Render Managed PostgreSQL + FastAPI Web Service
+# ==============================================================================
+
+services:
+  # FastAPI Application & WebSocket Service
+  - type: web
+    name: srmp-backend
+    runtime: python
+    region: singapore
+    plan: starter
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    preDeployCommand: "alembic upgrade head"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips='*' --ws-ping-interval 25 --ws-ping-timeout 60"
+    healthCheckPath: /health/ready
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.10"
+      - key: ENVIRONMENT
+        value: production
+      - key: SEED_DEMO_DATA
+        value: "false"
+      - key: PROJECT_NAME
+        value: "Smart Restaurant Management Platform"
+      - key: VERSION
+        value: "1.0.0"
+      - key: API_V1_STR
+        value: "/api/v1"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: DATABASE_URL
+        fromDatabase:
+          name: srmp-postgres
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "1440"
+      - key: QR_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        # Firebase Hosting default origin for project srmp-platform
+        value: https://srmp-platform.web.app
+      - key: PRODUCTION_DOMAIN
+        sync: false
+      - key: BACKEND_CORS_ORIGINS
+        # Allowed Firebase Hosting origins for srmp-platform
+        value: '["https://srmp-platform.web.app","https://srmp-platform.firebaseapp.com"]'
+      - key: PLATFORM_RAZORPAY_KEY_ID
+        value: rzp_test_platform_key_2026
+      - key: PLATFORM_RAZORPAY_KEY_SECRET
+        sync: false
+      - key: PLATFORM_RAZORPAY_WEBHOOK_SECRET
+        generateValue: true
+      - key: PLATFORM_SETTLEMENT_ACCOUNT
+        value: ""
+      - key: BUSINESS_OPERATING_MODEL
+        value: "INDIVIDUAL_UNREGISTERED"
+      - key: BUSINESS_IDENTITY_STATUS
+        value: "PENDING_OWNER_CONFIGURATION"
+      - key: BRAND_TRADE_NAME
+        value: "SRMP (Smart Restaurant Management Platform)"
+      - key: IS_GST_REGISTERED
+        value: "false"
+      - key: IS_GST_RATE_CA_CONFIRMED
+        value: "false"
+      - key: DISABLE_RESTAURANT_PAYMENT_FALLBACK
+        value: "true"
+      - key: LIVE_MODE_FLOW_A
+        value: "false"
+      - key: LIVE_MODE_FLOW_B
+        value: "false"
+      - key: FLOW_A_ENABLED
+        value: "true"
+      - key: FLOW_B_ENABLED
+        value: "true"
+      - key: EMERGENCY_DISABLE_PAYMENTS
+        value: "false"
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_BUCKET_NAME
+        value: srmp-production-uploads
+      - key: S3_ENDPOINT_URL
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_PUBLIC_BASE_URL
+        sync: false
+      - key: ENABLE_TRANSACTIONAL_EMAIL
+        value: "false"
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        value: ""
+      - key: SENTRY_DSN
+        sync: false
+      - key: OWNER_LEGAL_NAME
+        sync: false
+      - key: BUSINESS_PAN
+        sync: false
+      - key: BUSINESS_ADDRESS
+        sync: false
+      - key: OWNER_GSTIN
+        sync: false
+      - key: SUPPLIER_GST_STATE_CODE
+        sync: false
+      - key: GST_RATE_PERCENTAGE
+        value: "18.0"
+      - key: SAC_CODE
+        value: "998314"
+      - key: SAC_DESCRIPTION
+        value: "Information technology design and development services (SaaS Platform)"
+      - key: SUPPORT_EMAIL
+        sync: false
+      - key: GRIEVANCE_EMAIL
+        sync: false
+      - key: TELEPHONE_HELPLINE
+        sync: false
+      - key: GRIEVANCE_CONTACT_NAME
+        sync: false
+      - key: REFUND_POLICY_APPROVED
+        value: "false"
+      - key: PLATFORM_SETTLEMENT_BANK_NAME
+        sync: false
+      - key: PLATFORM_SETTLEMENT_IFSC
+        sync: false
+
+databases:
+  # Render Managed PostgreSQL Database (PostgreSQL 16)
+  - name: srmp-postgres
+    region: singapore
+    plan: starter
+    databaseName: srmp_production
+    user: srmp_admin
+    postgresMajorVersion: "16"

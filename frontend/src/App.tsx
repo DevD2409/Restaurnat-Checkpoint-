@@ -32,9 +32,14 @@ import { StaffManagementPage } from './pages/admin/StaffManagementPage';
 import { ReservationsAdminPage } from './pages/admin/ReservationsAdminPage';
 import { BillingAdminPage } from './pages/admin/BillingAdminPage';
 import { RestaurantSettingsPage } from './pages/admin/RestaurantSettingsPage';
+import { SubscriptionPage } from './pages/admin/SubscriptionPage';
+import { CustomerFeedbackPage } from './pages/admin/CustomerFeedbackPage';
 
-// Auth Pages
+// Auth & Platform Pages
 import { LoginPage } from './pages/auth/LoginPage';
+import { OnboardingPage } from './pages/auth/OnboardingPage';
+import { PlatformAdminPage } from './pages/platform/PlatformAdminPage';
+import { LegalCompliancePage } from './pages/public/LegalCompliancePage';
 
 export function App() {
   return (
@@ -45,6 +50,29 @@ export function App() {
             <Routes>
               {/* Home redirect */}
               <Route path="/" element={<Navigate to="/menu" replace />} />
+
+              {/* SaaS Platform Super Admin & Tenant Onboarding */}
+              <Route path="/platform" element={<PlatformAdminPage />} />
+              <Route path="/onboard" element={<OnboardingPage />} />
+
+              {/* Multi-Tenant Scoped Customer Routes */}
+              <Route path="/:tenantSlug/table/:qrToken" element={<CustomerLayout />}>
+                <Route index element={<MenuPage />} />
+                <Route path="cart" element={<CartPage />} />
+                <Route path="track/:orderId" element={<OrderTrackingPage />} />
+                <Route path="wifi" element={<WifiPage />} />
+                <Route path="split-bill" element={<SplitBillPage />} />
+                <Route path="reserve" element={<ReservationPage />} />
+              </Route>
+
+              <Route path="/:tenantSlug/menu" element={<CustomerLayout />}>
+                <Route index element={<MenuPage />} />
+                <Route path="cart" element={<CartPage />} />
+                <Route path="track/:orderId" element={<OrderTrackingPage />} />
+                <Route path="wifi" element={<WifiPage />} />
+                <Route path="split-bill" element={<SplitBillPage />} />
+                <Route path="reserve" element={<ReservationPage />} />
+              </Route>
 
               {/* Customer QR Routes */}
               <Route path="/table/:qrToken" element={<CustomerLayout />}>
@@ -84,11 +112,22 @@ export function App() {
                 <Route path="staff" element={<StaffManagementPage />} />
                 <Route path="reservations" element={<ReservationsAdminPage />} />
                 <Route path="billing" element={<BillingAdminPage />} />
+                <Route path="feedback" element={<CustomerFeedbackPage />} />
+                <Route path="subscription" element={<SubscriptionPage />} />
                 <Route path="settings" element={<RestaurantSettingsPage />} />
               </Route>
 
               {/* Staff Authentication */}
               <Route path="/login" element={<LoginPage />} />
+
+              {/* Public Legal & Compliance Routes */}
+              <Route path="/terms" element={<LegalCompliancePage initialTab="terms" />} />
+              <Route path="/privacy" element={<LegalCompliancePage initialTab="privacy" />} />
+              <Route path="/refund" element={<LegalCompliancePage initialTab="refund" />} />
+              <Route path="/refund-policy" element={<LegalCompliancePage initialTab="refund" />} />
+              <Route path="/pricing" element={<LegalCompliancePage initialTab="pricing" />} />
+              <Route path="/contact" element={<LegalCompliancePage initialTab="contact" />} />
+              <Route path="/compliance" element={<LegalCompliancePage />} />
 
               {/* Catch-all */}
               <Route path="*" element={<Navigate to="/menu" replace />} />

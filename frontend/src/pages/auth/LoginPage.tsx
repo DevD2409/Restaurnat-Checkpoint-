@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { Utensils, Lock, User, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const { login } = useAuth();
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin123');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -23,11 +23,6 @@ export const LoginPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickDemo = (userVal: string, passVal: string) => {
-    setUsername(userVal);
-    setPassword(passVal);
   };
 
   return (
@@ -97,37 +92,30 @@ export const LoginPage: React.FC = () => {
           </button>
         </form>
 
-        {/* Demo Fast Login Buttons */}
-        <div className="mt-8 pt-6 border-t border-zinc-800">
-          <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block mb-2 text-center">
-            Demo Credentials (1-Click Fill)
+        {/* Staff Access & Security Notice */}
+        <div className="mt-8 pt-6 border-t border-zinc-800 text-center">
+          <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block mb-1.5">
+            Authorized Staff & Partner Access Only
           </span>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <button
-              onClick={() => handleQuickDemo('admin', 'admin123')}
-              className="px-2.5 py-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 text-left transition"
-            >
-              👑 <strong className="text-white">Admin</strong>: admin123
-            </button>
-            <button
-              onClick={() => handleQuickDemo('manager', 'manager123')}
-              className="px-2.5 py-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 text-left transition"
-            >
-              📋 <strong className="text-white">Manager</strong>: manager123
-            </button>
-            <button
-              onClick={() => handleQuickDemo('waiter', 'waiter123')}
-              className="px-2.5 py-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 text-left transition"
-            >
-              🤵 <strong className="text-white">Waiter</strong>: waiter123
-            </button>
-            <button
-              onClick={() => handleQuickDemo('chef', 'chef123')}
-              className="px-2.5 py-1.5 rounded-lg bg-zinc-800/80 hover:bg-zinc-700 border border-zinc-700/60 text-zinc-300 text-left transition"
-            >
-              🍳 <strong className="text-white">Kitchen</strong>: chef123
-            </button>
-          </div>
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            Sign in with the credentials issued for your restaurant workspace or{' '}
+            <Link to="/register" className="text-amber-400 hover:text-amber-300 underline underline-offset-2">
+              create a new partner workspace
+            </Link>.
+          </p>
+        </div>
+
+        {/* Legal & Compliance Links for Razorpay Merchant Verification */}
+        <div className="mt-6 pt-4 border-t border-zinc-800/80 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-[11px] text-zinc-500">
+          <Link to="/terms" className="hover:text-amber-400 transition">Terms</Link>
+          <span>•</span>
+          <Link to="/privacy" className="hover:text-amber-400 transition">Privacy</Link>
+          <span>•</span>
+          <Link to="/refund" className="hover:text-amber-400 transition">Refund Policy</Link>
+          <span>•</span>
+          <Link to="/pricing" className="hover:text-amber-400 transition">Pricing</Link>
+          <span>•</span>
+          <Link to="/contact" className="hover:text-amber-400 transition">Contact Us</Link>
         </div>
       </div>
     </div>

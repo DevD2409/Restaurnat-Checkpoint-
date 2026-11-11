@@ -573,14 +573,15 @@ def test_scenario_18_reservation_creation_and_management():
     admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"}).json()
     headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
 
-    unique_slot_time = f"19:{int(time.time() % 60):02d}"
+    unique_slot_time = f"{int(time.time() % 10) + 10}:{int((time.time() * 100) % 60):02d}"
+    unique_date = f"2026-12-{(int(time.time()) % 25) + 1:02d}"
     res_payload = {
         "restaurant_id": 1,
         "customer_name": "Lord Robert Crawly",
         "customer_email": "crawly@downton.org",
         "customer_phone": "+919876543210",
         "guest_count": 4,
-        "reservation_date": "2026-12-25",
+        "reservation_date": unique_date,
         "reservation_time": unique_slot_time,
         "table_id": 1,
         "special_requests": "Window table, anniversary celebration"
@@ -660,31 +661,39 @@ def test_scenario_19_admin_menu_item_crud():
 # ==============================================================================
 def test_scenario_20_analytics_reflect_database_transactions():
     """Verify sales analytics and operational KPIs match exact database aggregate queries."""
-    analytics_resp = client.get("/api/v1/analytics/overview")
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"}).json()
+    headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
+    restaurant_id = admin_login.get("restaurant_id", 1)
+
+    analytics_resp = client.get("/api/v1/analytics/overview", headers=headers)
     assert analytics_resp.status_code == 200
     data = analytics_resp.json()
     kpis = data["kpis"]
 
     db = SessionLocal()
     try:
-        # Check total revenue against Payment table
-        db_revenue = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).filter(
+        # Check total revenue against Payment table for this restaurant
+        db_revenue = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).join(
+            Bill, Payment.bill_id == Bill.id
+        ).filter(
+            Bill.restaurant_id == restaurant_id,
             Payment.status == PaymentRecordStatus.SUCCESS
         ).scalar()
         assert float(kpis["total_revenue"]) == pytest.approx(float(db_revenue), 0.01)
 
-        # Check total orders count
-        db_order_count = db.query(Order).count()
+        # Check total orders count for this restaurant
+        db_order_count = db.query(Order).filter(Order.restaurant_id == restaurant_id).count()
         assert kpis["total_orders"] == db_order_count
 
-        # Check pending orders count
+        # Check pending orders count for this restaurant
         db_pending = db.query(Order).filter(
+            Order.restaurant_id == restaurant_id,
             Order.status.in_([OrderStatus.PLACED, OrderStatus.ACCEPTED, OrderStatus.PREPARING])
         ).count()
         assert kpis["pending_orders"] == db_pending
 
-        # Check total tables count
-        db_tables = db.query(Table).filter(Table.is_active == True).count()
+        # Check total tables count strictly for this restaurant
+        db_tables = db.query(Table).filter(Table.restaurant_id == restaurant_id, Table.is_active == True).count()
         assert kpis["total_tables"] == db_tables
     finally:
         db.close()

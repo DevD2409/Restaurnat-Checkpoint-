@@ -7,6 +7,15 @@ from app.models.order import Order, OrderItem, OrderStatusHistory, OrderStatus, 
 from app.models.service_request import ServiceRequest, ServiceRequestType, ServiceRequestStatus
 from app.models.reservation import Reservation, ReservationStatus
 from app.models.billing import Bill, BillSplit, Payment, BillStatus, SplitType, PaymentMethod, PaymentRecordStatus
+from app.models.feedback import Feedback, FeedbackDishRating, FeedbackPhoto
+from app.models.subscription import (
+    SubscriptionPlan,
+    SubscriptionCoupon,
+    SubscriptionInvoice,
+    SubscriptionPayment,
+    SubscriptionWebhookEvent,
+    SubscriptionNotification
+)
 
 __all__ = [
     "Base",
@@ -37,6 +46,14 @@ __all__ = [
     "BillStatus",
     "SplitType",
     "PaymentMethod",
-    "PaymentRecordStatus"
+    "PaymentRecordStatus",
+    "Feedback",
+    "FeedbackDishRating",
+    "FeedbackPhoto",
+    "SubscriptionPlan",
+    "SubscriptionCoupon",
+    "SubscriptionInvoice",
+    "SubscriptionPayment",
+    "SubscriptionWebhookEvent",
+    "SubscriptionNotification"
 ]
-

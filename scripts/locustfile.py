@@ -1,3 +1,4 @@
+import os
 import random
 import time
 from locust import HttpUser, task, between, events
@@ -69,10 +70,14 @@ class StaffUser(HttpUser):
     def on_start(self):
         self.auth_token = None
         self.headers = {}
+        staff_username = os.getenv("LOCUST_STAFF_USERNAME", "")
+        staff_password = os.getenv("LOCUST_STAFF_PASSWORD", "")
+        if not (staff_username and staff_password):
+            return
         try:
             resp = self.client.post("/api/v1/auth/login", json={
-                "username": "admin",
-                "password": "admin123"
+                "username": staff_username,
+                "password": staff_password
             }, name="/auth/login")
             if resp.status_code == 200:
                 self.auth_token = resp.json().get("access_token")

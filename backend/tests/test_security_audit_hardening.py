@@ -121,3 +121,69 @@ def test_qr_token_max_age_and_tampering():
     sig = hmac.new(settings.QR_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
     expired_token = f"1_1_T-01_{old_ts}_{sig}"
     assert verify_table_qr_token(expired_token, max_age_days=180) is None
+
+
+def test_production_blocks_demo_credentials_and_demo_seeding(monkeypatch):
+    """Verify production rejects demo passwords/accounts, blocks seeding, and supports strong credentials."""
+    from pydantic import ValidationError
+    from app.core.config import Settings
+    from app.utils.seed_data import seed_database, _resolve_seed_password
+
+    # 1. Production config validator must reject SEED_DEMO_DATA=True
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            ENVIRONMENT="production",
+            SEED_DEMO_DATA=True,
+            SECRET_KEY="a" * 64,
+            DATABASE_URL="postgresql://user:pass@localhost:5432/srmp_prod",
+            QR_SECRET="b" * 32,
+        )
+
+    # 2. _resolve_seed_password generates strong random secret when env vars are unset
+    generated_pw, was_generated = _resolve_seed_password(("SRMP_UNSET_SEED_VAR_999",), "test_staff")
+    assert was_generated is True
+    assert len(generated_pw) >= 20
+
+    # 3. Switch settings to production cleanly for runtime checks
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+
+    with pytest.raises(RuntimeError):
+        seed_database()
+
+    # Known demo/weak fixture passwords must be rejected in production login
+    for demo_user, demo_pw in (
+        ("superadmin", "superadmin123"),
+        ("admin", "admin123"),
+        (f"owner_{int(time.time())}", "Password@2026"),
+    ):
+        resp = client.post("/api/v1/auth/login", json={"username": demo_user, "password": demo_pw})
+        assert resp.status_code == 403
+
+    # Onboarding in production must reject weak demo passwords and reserved demo emails
+    uid = int(time.time() * 1000) % 1000000
+    weak_onboard = client.post("/api/v1/onboarding/register", json={
+        "restaurant_name": f"Weak Prod Check {uid}",
+        "owner_full_name": "Prod Checker",
+        "owner_email": f"prodcheck_{uid}@example.com",
+        "owner_username": f"prodweak_{uid}",
+        "owner_password": "Password@2026",
+    })
+    assert weak_onboard.status_code == 400
+
+    # Onboarding with a strong password in production succeeds and can log in
+    strong_pw = "Str0ng!Prod#Key_9482"
+    strong_username = f"prodstrong_{uid}"
+    strong_onboard = client.post("/api/v1/onboarding/register", json={
+        "restaurant_name": f"Strong Prod Bistro {uid}",
+        "owner_full_name": "Strong Owner",
+        "owner_email": f"strongowner_{uid}@example.com",
+        "owner_username": strong_username,
+        "owner_password": strong_pw,
+    })
+    assert strong_onboard.status_code == 201
+    strong_login = client.post("/api/v1/auth/login", json={
+        "username": strong_username,
+        "password": strong_pw,
+    })
+    assert strong_login.status_code == 200

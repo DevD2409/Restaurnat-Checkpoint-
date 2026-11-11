@@ -188,3 +188,4 @@ erDiagram
    - Tenant B kitchen attempting to connect to Tenant A kitchen WebSocket -> `Policy Violation (1008)`.
    - Tenant A menu updates invisible to Tenant B customers.
 2. Run full 40-test baseline regression to ensure 100% backward compatibility for existing features.
+
