@@ -5,9 +5,8 @@ import {
   Search, Filter, ChevronRight, Crown, Power, BarChart3, ArrowUpRight,
   Tag, Calendar, Sparkles, Check, Clock, Plus, Zap
 } from 'lucide-react';
-import axios from 'axios';
 import { PlatformStats, PlatformTenant } from '../../types';
-import { subscriptionsApi } from '../../services/api';
+import { apiClient, subscriptionsApi } from '../../services/api';
 
 export function PlatformAdminPage() {
   const [stats, setStats] = useState<PlatformStats | null>(null);
@@ -38,22 +37,19 @@ export function PlatformAdminPage() {
   const fetchPlatformData = async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      const authHeader = { headers: { Authorization: `Bearer ${token}` } };
-
       const [statsRes, tenantsRes, analyticsRes, couponsRes, plansRes] = await Promise.all([
-        axios.get('/api/v1/platform/stats', authHeader),
-        axios.get('/api/v1/platform/restaurants', authHeader),
+        apiClient.get('/platform/stats'),
+        apiClient.get('/platform/restaurants'),
         subscriptionsApi.getAdminAnalytics().catch(() => null),
         subscriptionsApi.listCoupons().catch(() => []),
         subscriptionsApi.getPlans().catch(() => [])
       ]);
 
-      setStats(statsRes.data);
-      setTenants(tenantsRes.data);
-      setAnalytics(analyticsRes);
-      setCoupons(couponsRes);
-      setPlans(plansRes);
+      setStats(statsRes.data && typeof statsRes.data === 'object' ? statsRes.data : null);
+      setTenants(Array.isArray(tenantsRes.data) ? tenantsRes.data : []);
+      setAnalytics(analyticsRes && typeof analyticsRes === 'object' ? analyticsRes : null);
+      setCoupons(Array.isArray(couponsRes) ? couponsRes : []);
+      setPlans(Array.isArray(plansRes) ? plansRes : []);
     } catch (err) {
       console.error('Failed to fetch SaaS platform data:', err);
     } finally {
@@ -69,11 +65,9 @@ export function PlatformAdminPage() {
     try {
       setActionLoading(tenantId);
       const newStatus = currentStatus === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-      const token = localStorage.getItem('token');
-      await axios.patch(
-        `/api/v1/platform/restaurants/${tenantId}/subscription`,
-        { subscription_status: newStatus },
-        { headers: { Authorization: `Bearer ${token}` } }
+      await apiClient.patch(
+        `/platform/restaurants/${tenantId}/subscription`,
+        { subscription_status: newStatus }
       );
       await fetchPlatformData();
     } catch (err) {
@@ -549,7 +543,7 @@ export function PlatformAdminPage() {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. FLASH999"
+                  placeholder="e.g. LAUNCH20"
                   value={newCoupon.code}
                   onChange={(e) => setNewCoupon({ ...newCoupon, code: e.target.value.toUpperCase() })}
                   className="w-full mt-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-brand-500"
@@ -557,7 +551,7 @@ export function PlatformAdminPage() {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-300">Discount Amount in Paise (e.g. 100000 = ₹1,000)</label>
+                <label className="text-xs font-semibold text-slate-300">Discount Amount in Paise (e.g. 20000 = ₹200)</label>
                 <input
                   type="number"
                   required

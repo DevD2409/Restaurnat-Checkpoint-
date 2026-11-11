@@ -19,13 +19,25 @@ dist/
 dist-ssr/
 *.local
 
+# Firebase Hosting local cache & debug logs
+.firebase/
+firebase-debug.log*
+ui-debug.log*
+
 # Environment variables & secrets
 .env
 backend/.env
 frontend/.env
+.env.*
+backend/.env.*
+frontend/.env.*
 !.env.example
 !backend/.env.example
+!backend/.env.staging.example
+!backend/.env.production.template
 !frontend/.env.example
+!frontend/.env.production
+!frontend/.env.production.example
 
 # Logs & Temporary
 *.log
@@ -35,13 +47,21 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Database & SQLite binaries (preserve schema & migrations)
+# Database, PostgreSQL clusters & SQLite binaries (preserve schema & migrations)
+*.db
+*.sqlite
 *.db-journal
 *.sqlite3
+pgdata_*/
+staging_pgdata/
 
-# Backups folder binaries (scripts/backup_db.py handles automated backups)
+# Backups folder binaries & manifests (scripts/backup_db.py handles automated backups)
 backups/*.db
 backups/*.dump
+backups/*.json
+
+# Local runtime uploads (production uses Cloudflare R2)
+backend/static/uploads/
 
 # OS & Editor
 .DS_Store

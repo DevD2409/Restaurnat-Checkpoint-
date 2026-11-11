@@ -10,8 +10,8 @@ if settings.DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False, "timeout": 30}
     engine_kwargs["poolclass"] = NullPool
 else:
-    engine_kwargs["pool_size"] = 50
-    engine_kwargs["max_overflow"] = 50
+    engine_kwargs["pool_size"] = 20
+    engine_kwargs["max_overflow"] = 10
     engine_kwargs["pool_timeout"] = 30
     engine_kwargs["pool_recycle"] = 1800
 

@@ -17,8 +17,10 @@ from app.models import Base
 # access to the values within the .ini file in use.
 config = context.config
 
-# Set sqlalchemy.url from our settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Set sqlalchemy.url from settings if not explicitly passed or if placeholder in alembic.ini
+current_url = config.get_main_option("sqlalchemy.url")
+if not current_url or "driver://user:pass" in current_url:
+    config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:
@@ -47,7 +49,9 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True
         )
 
         with context.begin_transaction():

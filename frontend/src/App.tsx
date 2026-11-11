@@ -39,6 +39,7 @@ import { CustomerFeedbackPage } from './pages/admin/CustomerFeedbackPage';
 import { LoginPage } from './pages/auth/LoginPage';
 import { OnboardingPage } from './pages/auth/OnboardingPage';
 import { PlatformAdminPage } from './pages/platform/PlatformAdminPage';
+import { LegalCompliancePage } from './pages/public/LegalCompliancePage';
 
 export function App() {
   return (
@@ -118,6 +119,15 @@ export function App() {
 
               {/* Staff Authentication */}
               <Route path="/login" element={<LoginPage />} />
+
+              {/* Public Legal & Compliance Routes */}
+              <Route path="/terms" element={<LegalCompliancePage initialTab="terms" />} />
+              <Route path="/privacy" element={<LegalCompliancePage initialTab="privacy" />} />
+              <Route path="/refund" element={<LegalCompliancePage initialTab="refund" />} />
+              <Route path="/refund-policy" element={<LegalCompliancePage initialTab="refund" />} />
+              <Route path="/pricing" element={<LegalCompliancePage initialTab="pricing" />} />
+              <Route path="/contact" element={<LegalCompliancePage initialTab="contact" />} />
+              <Route path="/compliance" element={<LegalCompliancePage />} />
 
               {/* Catch-all */}
               <Route path="*" element={<Navigate to="/menu" replace />} />

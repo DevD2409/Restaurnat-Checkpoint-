@@ -138,13 +138,17 @@ def test_flow_a_payment_signature_verification_success_and_tampered():
     db.add(bill)
     db.commit()
     bill_id = bill.id
+    from app.services.payment_service import PaymentService
+    restaurant = db.query(Restaurant).filter(Restaurant.id == 1).first()
+    rest_creds = PaymentService.get_restaurant_credentials(restaurant)
+    restaurant_secret = rest_creds["key_secret"]
     db.close()
 
     order_id = f"order_real_test_{int(time.time())}"
     payment_id = f"pay_real_test_{int(time.time())}"
     # Generate cryptographic HMAC SHA256 signature using the active test restaurant key secret
     valid_signature = hmac.new(
-        settings.RAZORPAY_KEY_SECRET.encode(),
+        restaurant_secret.encode(),
         f"{order_id}|{payment_id}".encode(),
         hashlib.sha256
     ).hexdigest()
@@ -216,12 +220,16 @@ def test_flow_a_duplicate_payment_callback_idempotency():
     db.add(bill)
     db.commit()
     bill_id = bill.id
+    from app.services.payment_service import PaymentService
+    restaurant = db.query(Restaurant).filter(Restaurant.id == 1).first()
+    rest_creds = PaymentService.get_restaurant_credentials(restaurant)
+    restaurant_secret = rest_creds["key_secret"]
     db.close()
 
     order_id = f"order_dup_{int(time.time())}"
     payment_id = f"pay_dup_{int(time.time())}"
     signature = hmac.new(
-        settings.RAZORPAY_KEY_SECRET.encode(),
+        restaurant_secret.encode(),
         f"{order_id}|{payment_id}".encode(),
         hashlib.sha256
     ).hexdigest()
@@ -312,8 +320,15 @@ def test_flow_a_raw_body_webhook_signature_and_idempotency():
     raw_body = json.dumps(webhook_payload).encode()
 
     # Generate HMAC SHA256 using restaurant webhook secret
+    db = SessionLocal()
+    from app.services.payment_service import PaymentService
+    restaurant = db.query(Restaurant).filter(Restaurant.id == 1).first()
+    rest_creds = PaymentService.get_restaurant_credentials(restaurant)
+    restaurant_webhook_secret = rest_creds["webhook_secret"]
+    db.close()
+
     valid_sig = hmac.new(
-        settings.RAZORPAY_WEBHOOK_SECRET.encode(),
+        restaurant_webhook_secret.encode(),
         raw_body,
         hashlib.sha256
     ).hexdigest()
@@ -483,11 +498,11 @@ def test_flow_b_subscription_checkout_platform_merchant(auth_tokens):
     data = res.json()
     assert "razorpay_order_id" in data
     assert data["key_id"] == settings.PLATFORM_RAZORPAY_KEY_ID
-    assert data["subtotal_paise"] == 199900
-    assert data["discount_paise"] == 99950
-    # Tax 18% on (199900 - 99950 = 99950) = 17991 paise
-    assert data["tax_paise"] == 17991
-    assert data["final_amount_paise"] == 117941
+    assert data["subtotal_paise"] == 99900
+    assert data["discount_paise"] == 49950
+    # Individual unregistered default: no extra GST added on top; inclusive total = 49950 paise
+    assert data["tax_paise"] == 0
+    assert data["final_amount_paise"] == 49950
 
 def test_flow_b_subscription_payment_verification_and_tenant_activation(auth_tokens):
     # 1. Create checkout invoice
@@ -534,16 +549,17 @@ def test_flow_b_subscription_payment_verification_and_tenant_activation(auth_tok
 
 def test_flow_b_platform_webhook_signature_and_idempotency():
     db = SessionLocal()
-    # Create an unpaid invoice
+    # Create an unpaid non-GST payment receipt invoice for ₹999
     inv = SubscriptionInvoice(
-        invoice_number=f"SRMP-INV-TEST-{int(time.time())}",
+        invoice_number=f"R2627/001-{int(time.time()) % 90000:05d}",
         restaurant_id=1,
         plan_id=1,
         billing_cycle="MONTHLY",
-        subtotal_paise=199900,
+        subtotal_paise=99900,
         discount_paise=0,
-        tax_paise=35982,
-        final_amount_paise=235882,
+        tax_percentage=0.0,
+        tax_paise=0,
+        final_amount_paise=99900,
         status="UNPAID"
     )
     db.add(inv)
@@ -559,7 +575,7 @@ def test_flow_b_platform_webhook_signature_and_idempotency():
             "payment": {
                 "entity": {
                     "id": f"pay_saas_webhook_{int(time.time())}",
-                    "amount": 235882,
+                    "amount": 99900,
                     "status": "captured",
                     "notes": {
                         "invoice_id": str(inv_id),

@@ -1,8 +1,12 @@
 import json
+import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.core.database import SessionLocal, engine, Base
-from app.core.security import get_password_hash, generate_table_qr_token
+from app.core.security import get_password_hash, generate_table_qr_token, is_demo_seed_account
+from app.core.encryption import encrypt_secret
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
 from app.models.table import Table, TableSession, TableStatus
@@ -11,11 +15,125 @@ from app.models.order import Order, OrderItem, OrderStatusHistory, OrderStatus, 
 from app.models.service_request import ServiceRequest, ServiceRequestType, ServiceRequestStatus
 from app.models.reservation import Reservation, ReservationStatus
 from app.models.billing import Bill, BillSplit, Payment, BillStatus, SplitType, PaymentMethod, PaymentRecordStatus
+from app.models.subscription import SubscriptionPlan, SubscriptionCoupon
 
-def seed_database():
-    # Create all tables in database
-    Base.metadata.create_all(bind=engine)
-    db: Session = SessionLocal()
+AUTHORITATIVE_SUBSCRIPTION_PLANS = [
+    {
+        "plan_code": "MONTHLY",
+        "name": "Monthly Plan",
+        "billing_cycle": "MONTHLY",
+        "price_paise": 99900,
+        "duration_days": 30,
+        "max_tables": 100,
+        "features": "Unlimited Digital Menus & QR Ordering,Real-Time KDS & Waiter Notifications,Customer Feedback & Analytics,Direct-to-Merchant UPI & Cards,All Applicable Taxes Included",
+        "entitlements": {
+            "max_tables": 100,
+            "kds_access": True,
+            "advanced_analytics": True,
+            "custom_branding": True,
+            "multi_branch": False,
+        },
+    },
+    {
+        "plan_code": "YEARLY",
+        "name": "Yearly Plan",
+        "billing_cycle": "YEARLY",
+        "price_paise": 999900,
+        "duration_days": 365,
+        "max_tables": 250,
+        "features": "All Monthly Plan Features,2 Months Effective Savings vs Monthly,Priority Onboarding Support,Direct-to-Merchant Settlement,All Applicable Taxes Included",
+        "entitlements": {
+            "max_tables": 250,
+            "kds_access": True,
+            "advanced_analytics": True,
+            "custom_branding": True,
+            "multi_branch": True,
+        },
+    },
+]
+
+RETIRED_PRICING_COUPON_CODES = ("MONTHLY999", "YEARLY9999")
+
+
+def ensure_subscription_plans_synced(db: Session) -> bool:
+    """
+    Ensures authoritative tax-inclusive SaaS plans (₹999/month, ₹9,999/year)
+    and retired legacy pricing coupons remain consistent across seed and migrations.
+    """
+    changed = False
+    for spec in AUTHORITATIVE_SUBSCRIPTION_PLANS:
+        plan = db.query(SubscriptionPlan).filter(SubscriptionPlan.plan_code == spec["plan_code"]).first()
+        if not plan:
+            plan = SubscriptionPlan(
+                plan_code=spec["plan_code"],
+                name=spec["name"],
+                billing_cycle=spec["billing_cycle"],
+                price_paise=spec["price_paise"],
+                currency="INR",
+                duration_days=spec["duration_days"],
+                max_tables=spec["max_tables"],
+                features=spec["features"],
+                entitlements_json=json.dumps(spec["entitlements"]),
+                is_active=True,
+            )
+            db.add(plan)
+            changed = True
+        else:
+            if (
+                plan.price_paise != spec["price_paise"]
+                or plan.name != spec["name"]
+                or plan.duration_days != spec["duration_days"]
+                or not plan.is_active
+            ):
+                plan.name = spec["name"]
+                plan.billing_cycle = spec["billing_cycle"]
+                plan.price_paise = spec["price_paise"]
+                plan.duration_days = spec["duration_days"]
+                plan.max_tables = spec["max_tables"]
+                plan.features = spec["features"]
+                plan.entitlements_json = json.dumps(spec["entitlements"])
+                plan.is_active = True
+                changed = True
+
+    retired_coupons = (
+        db.query(SubscriptionCoupon)
+        .filter(SubscriptionCoupon.code.in_(RETIRED_PRICING_COUPON_CODES))
+        .all()
+    )
+    for coupon in retired_coupons:
+        if coupon.is_active:
+            coupon.is_active = False
+            changed = True
+
+    return changed
+
+def _resolve_seed_password(env_vars: tuple[str, ...], label: str) -> tuple[str, bool]:
+    """
+    Resolve an initial seed password from environment variables or generate a random one.
+    Returns (password, was_generated).
+    """
+    for var_name in env_vars:
+        val = os.getenv(var_name, "").strip()
+        if val:
+            return val, False
+    if "SUPERADMIN_INITIAL_PASSWORD" in env_vars and settings.SUPERADMIN_INITIAL_PASSWORD:
+        return settings.SUPERADMIN_INITIAL_PASSWORD, False
+    generated = secrets.token_urlsafe(18)
+    print(f"[SEED] Generated random password for {label} (must_change_password=True; set {env_vars[0]} to customize in dev/test).")
+    return generated, True
+
+
+def seed_database(db: Session = None):
+    if settings.ENVIRONMENT.lower() == "production":
+        raise RuntimeError("Demo seeding is prohibited in production.")
+    should_close = False
+    if db is None:
+        Base.metadata.create_all(bind=engine)
+        db = SessionLocal()
+        should_close = True
+    else:
+        bind = db.get_bind()
+        Base.metadata.create_all(bind=bind)
 
     try:
         # Check if restaurant already exists
@@ -28,24 +146,44 @@ def seed_database():
             if not existing_restaurant.subscription_plan:
                 existing_restaurant.subscription_plan = "ENTERPRISE"
                 changed = True
+            if not existing_restaurant.razorpay_key_id:
+                existing_restaurant.razorpay_key_id = "rzp_test_saffron_merchant_key"
+                existing_restaurant.razorpay_key_secret_enc = encrypt_secret("rzp_test_saffron_merchant_secret")
+                existing_restaurant.razorpay_webhook_secret_enc = encrypt_secret("rzp_test_saffron_webhook_secret_2026")
+                existing_restaurant.razorpay_account_id = "acc_saffron_merchant_001"
+                existing_restaurant.payment_gateway_mode = "DIRECT_MERCHANT"
+                existing_restaurant.settlement_bank_account_verified = True
+                changed = True
             if not existing_restaurant.subscription_status:
                 existing_restaurant.subscription_status = "ACTIVE"
                 changed = True
 
-            # Ensure superadmin user exists
+            # Ensure superadmin user exists without legacy placeholder domain
             superadmin = db.query(User).filter(User.username == "superadmin").first()
             if not superadmin:
+                sa_password, sa_generated = _resolve_seed_password(
+                    ("SUPERADMIN_INITIAL_PASSWORD", "SEED_DEMO_SUPERADMIN_PASSWORD"),
+                    "superadmin"
+                )
                 superadmin = User(
                     restaurant_id=None,
-                    email="superadmin@srmp-saas.com",
+                    email="superadmin@srmp.local",
                     username="superadmin",
-                    hashed_password=get_password_hash("superadmin123"),
+                    hashed_password=get_password_hash(sa_password),
                     full_name="Platform Super Administrator",
                     role=UserRole.PLATFORM_SUPER_ADMIN,
                     phone_number="+91 99999 00000",
-                    is_active=True
+                    is_active=True,
+                    must_change_password=sa_generated
                 )
                 db.add(superadmin)
+                changed = True
+            elif is_demo_seed_account(superadmin.email):
+                superadmin.email = "superadmin@srmp.local"
+                changed = True
+
+            # Ensure subscription plans & retired coupons match tax-inclusive pricing
+            if ensure_subscription_plans_synced(db):
                 changed = True
 
             # Ensure admin has owner_id linked
@@ -86,6 +224,12 @@ def seed_database():
             wifi_instructions="Connect to 'RoyalSaffron-Guest-HighSpeed'. Open your browser to access the captive high-speed internet portal. Complimentary for guests.",
             subscription_plan="ENTERPRISE",
             subscription_status="ACTIVE",
+            razorpay_key_id="rzp_test_saffron_merchant_key",
+            razorpay_key_secret_enc=encrypt_secret("rzp_test_saffron_merchant_secret"),
+            razorpay_webhook_secret_enc=encrypt_secret("rzp_test_saffron_webhook_secret_2026"),
+            razorpay_account_id="acc_saffron_merchant_001",
+            payment_gateway_mode="DIRECT_MERCHANT",
+            settlement_bank_account_verified=True,
             opening_time="11:30 AM",
             closing_time="11:30 PM",
             is_active=True
@@ -95,66 +239,81 @@ def seed_database():
         db.refresh(restaurant)
 
         # 2. Staff & Admin Users
+        sa_password, sa_generated = _resolve_seed_password(
+            ("SUPERADMIN_INITIAL_PASSWORD", "SEED_DEMO_SUPERADMIN_PASSWORD"), "superadmin"
+        )
+        admin_password, admin_generated = _resolve_seed_password(("SEED_DEMO_ADMIN_PASSWORD",), "admin")
+        manager_password, manager_generated = _resolve_seed_password(("SEED_DEMO_MANAGER_PASSWORD",), "manager")
+        waiter_password, waiter_generated = _resolve_seed_password(("SEED_DEMO_WAITER_PASSWORD",), "waiter")
+        chef_password, chef_generated = _resolve_seed_password(("SEED_DEMO_CHEF_PASSWORD",), "chef")
+        cashier_password, cashier_generated = _resolve_seed_password(("SEED_DEMO_CASHIER_PASSWORD",), "cashier")
+
         users = [
             User(
                 restaurant_id=None,
-                email="superadmin@srmp-saas.com",
+                email="superadmin@srmp.local",
                 username="superadmin",
-                hashed_password=get_password_hash("superadmin123"),
+                hashed_password=get_password_hash(sa_password),
                 full_name="Platform Super Administrator",
                 role=UserRole.PLATFORM_SUPER_ADMIN,
                 phone_number="+91 99999 00000",
-                is_active=True
+                is_active=True,
+                must_change_password=sa_generated
             ),
             User(
                 restaurant_id=restaurant.id,
                 email="admin@royalsaffron.com",
                 username="admin",
-                hashed_password=get_password_hash("admin123"),
+                hashed_password=get_password_hash(admin_password),
                 full_name="Arjun Verma",
                 role=UserRole.ADMIN,
                 phone_number="+91 98111 00001",
-                is_active=True
+                is_active=True,
+                must_change_password=admin_generated
             ),
             User(
                 restaurant_id=restaurant.id,
                 email="manager@royalsaffron.com",
                 username="manager",
-                hashed_password=get_password_hash("manager123"),
+                hashed_password=get_password_hash(manager_password),
                 full_name="Priya Sharma",
                 role=UserRole.MANAGER,
                 phone_number="+91 98111 00002",
-                is_active=True
+                is_active=True,
+                must_change_password=manager_generated
             ),
             User(
                 restaurant_id=restaurant.id,
                 email="waiter@royalsaffron.com",
                 username="waiter",
-                hashed_password=get_password_hash("waiter123"),
+                hashed_password=get_password_hash(waiter_password),
                 full_name="Rahul Singh",
                 role=UserRole.WAITER,
                 phone_number="+91 98111 00003",
-                is_active=True
+                is_active=True,
+                must_change_password=waiter_generated
             ),
             User(
                 restaurant_id=restaurant.id,
                 email="chef@royalsaffron.com",
                 username="chef",
-                hashed_password=get_password_hash("chef123"),
+                hashed_password=get_password_hash(chef_password),
                 full_name="Chef Kabir Sen",
                 role=UserRole.KITCHEN,
                 phone_number="+91 98111 00004",
-                is_active=True
+                is_active=True,
+                must_change_password=chef_generated
             ),
             User(
                 restaurant_id=restaurant.id,
                 email="cashier@royalsaffron.com",
                 username="cashier",
-                hashed_password=get_password_hash("cashier123"),
+                hashed_password=get_password_hash(cashier_password),
                 full_name="Ananya Roy",
                 role=UserRole.CASHIER,
                 phone_number="+91 98111 00005",
-                is_active=True
+                is_active=True,
+                must_change_password=cashier_generated
             ),
         ]
         db.add_all(users)
@@ -842,6 +1001,7 @@ def seed_database():
             )
             db.add(res)
 
+        ensure_subscription_plans_synced(db)
         db.commit()
         print("Database seeded successfully with rich realistic restaurant data!")
 
@@ -850,7 +1010,8 @@ def seed_database():
         print(f"Error seeding database: {e}")
         raise e
     finally:
-        db.close()
+        if should_close:
+            db.close()
 
 if __name__ == "__main__":
     seed_database()

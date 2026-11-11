@@ -98,17 +98,19 @@ Frontend will be accessible at: `http://localhost:5173`
 
 ---
 
-## 🔑 Default Seed Credentials
+## 🔑 Development Seeding & Production Provisioning
 
-The database automatically seeds with realistic restaurant staff profiles:
+- **Development / Local Demo (`ENVIRONMENT=development`)**: `python -m app.utils.seed_data` populates the sample *Royal Saffron* tenant without hardcoded passwords in application source. Passwords are read from `SUPERADMIN_INITIAL_PASSWORD` and `SEED_DEMO_*_PASSWORD` environment variables (or generated randomly per run with `must_change_password=true`).
+- **Production (`ENVIRONMENT=production`)**: Demo seeding (`SEED_DEMO_DATA=true`) is disabled and rejected at startup; known demo fixture passwords and `@royalsaffron.com` fixture emails are blocked from authentication. Onboard real restaurant owners via `/register` or `/api/v1/onboarding/register`, and provision the platform super-admin with a strong random `SUPERADMIN_INITIAL_PASSWORD`.
 
-| Role | Username | Email | Password | Access Rights |
-|------|----------|-------|----------|---------------|
-| **Admin** | `admin` | `admin@royalsaffron.com` | `admin123` | Full administrative control, analytics, menu CRUD, settings |
-| **Manager** | `manager` | `manager@royalsaffron.com` | `manager123` | Operations, table assignments, floor, reservations, menu |
-| **Waiter** | `waiter` | `waiter@royalsaffron.com` | `waiter123` | Floor map, service requests, order assistance, bill delivery |
-| **Kitchen** | `chef` | `chef@royalsaffron.com` | `chef123` | Kitchen Display System, preparation timers, status updates |
-| **Cashier** | `cashier` | `cashier@royalsaffron.com` | `cashier123` | Billing settlements, cash/card payment records, receipts |
+| Role | Username | Access Rights |
+|------|----------|---------------|
+| **Platform Super Admin** | `superadmin` | Multi-tenant governance, platform subscriptions, billing overview |
+| **Admin** | `admin` *(dev seed)* | Full administrative control, analytics, menu CRUD, settings |
+| **Manager** | `manager` *(dev seed)* | Operations, table assignments, floor, reservations, menu |
+| **Waiter** | `waiter` *(dev seed)* | Floor map, service requests, order assistance, bill delivery |
+| **Kitchen** | `chef` *(dev seed)* | Kitchen Display System, preparation timers, status updates |
+| **Cashier** | `cashier` *(dev seed)* | Billing settlements, cash/card payment records, receipts |
 
 ---
 
@@ -133,4 +135,15 @@ The database automatically seeds with realistic restaurant staff profiles:
   - `/admin/billing` - Invoices, Taxes & Settlement Logs
   - `/admin/settings` - Restaurant Profile, Wi-Fi & GST Settings
 - `/login` - **Staff Authentication Gateway**
+- `/pricing`, `/terms`, `/privacy`, `/refund`, `/contact` - **Public Compliance & Transparent Pricing Pages**
 
+---
+
+## 💳 SaaS Subscription Pricing & Individual Business Operating Model
+
+- **Operating Model:** `INDIVIDUAL_UNREGISTERED` (platform operated by an individual owner under the SRMP brand/trade name; legal owner name, bank reference, GST status, domain, and contact channels are environment-configurable and marked pending until verified).
+- **Direct Tax-Inclusive Pricing:**
+  - **Monthly Plan:** **₹999/month** (`99,900` integer paise) — inclusive of applicable taxes and compulsory charges.
+  - **Yearly Plan:** **₹9,999/year** (`999,900` integer paise) — inclusive of applicable taxes and compulsory charges.
+- **Tax Treatment:** While operating as an unregistered individual business (`IS_GST_REGISTERED=false`), GST is not collected and Non-GST Payment Receipts (`R{FY}/...`) are issued. If GST registration + CA confirmation are enabled in configuration (`IS_GST_REGISTERED=true`, `IS_GST_RATE_CA_CONFIRMED=true`), 18% GST is extracted inclusively (`84,661 + 15,239 = 99,900` monthly; `847,373 + 152,527 = 999,900` yearly) without ever increasing the advertised final price.
+- **Dual-Flow Settlement Isolation:** Flow A restaurant customer dining payments settle strictly to each restaurant's own Razorpay merchant account; Flow B SaaS subscriptions settle strictly to the platform owner's configured merchant bank account. Live-mode payment flags remain disabled (`false`) by default for safe test-mode development.

@@ -27,5 +27,6 @@ class User(Base):
     phone_number = Column(String(30), nullable=True)
     shift = Column(String(50), nullable=True, default="General Shift")  # Morning, Evening, Night
     is_active = Column(Boolean, default=True)
+    must_change_password = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

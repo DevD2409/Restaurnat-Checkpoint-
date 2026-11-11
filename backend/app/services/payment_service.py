@@ -26,17 +26,32 @@ class PaymentService:
             key_id = restaurant.razorpay_key_id
             key_secret = decrypt_secret(restaurant.razorpay_key_secret_enc)
             webhook_secret = decrypt_secret(restaurant.razorpay_webhook_secret_enc) or settings.RAZORPAY_WEBHOOK_SECRET
+            is_configured = True
         else:
-            # Fallback to sandbox platform defaults for initial testing
+            # Fallback to platform credentials is strictly prohibited in production and staging
+            # A restaurant without its own approved payment configuration must not be allowed to accept online payments.
+            if settings.ENVIRONMENT.lower() in ["production", "staging"] or getattr(settings, "DISABLE_RESTAURANT_PAYMENT_FALLBACK", False):
+                return {
+                    "key_id": None,
+                    "key_secret": None,
+                    "webhook_secret": None,
+                    "is_custom": False,
+                    "is_configured": False,
+                    "gateway_mode": restaurant.payment_gateway_mode or "DIRECT_MERCHANT",
+                    "account_id": None
+                }
+            # Fallback to sandbox platform defaults only in permissive development mode
             key_id = settings.RAZORPAY_KEY_ID
             key_secret = settings.RAZORPAY_KEY_SECRET
             webhook_secret = settings.RAZORPAY_WEBHOOK_SECRET
+            is_configured = True
 
         return {
             "key_id": key_id,
             "key_secret": key_secret,
             "webhook_secret": webhook_secret,
             "is_custom": is_custom,
+            "is_configured": is_configured,
             "gateway_mode": restaurant.payment_gateway_mode or "DIRECT_MERCHANT",
             "account_id": restaurant.razorpay_account_id
         }
@@ -45,6 +60,8 @@ class PaymentService:
     def get_restaurant_client(cls, restaurant: Restaurant) -> Optional[razorpay.Client]:
         """Returns initialized Razorpay SDK client using tenant's verified credentials."""
         creds = cls.get_restaurant_credentials(restaurant)
+        if not creds.get("is_configured") or not creds.get("key_id"):
+            return None
         try:
             return razorpay.Client(auth=(creds["key_id"], creds["key_secret"]))
         except Exception as e:
@@ -63,7 +80,30 @@ class PaymentService:
         Creates a Razorpay gateway order on the restaurant's merchant account.
         In Route mode, attaches automatic transfers to restaurant's linked account.
         """
+        from fastapi import HTTPException, status
+        if getattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Online payments are temporarily disabled by platform administration."
+            )
+        if not getattr(settings, "FLOW_A_ENABLED", True):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Restaurant dining payments are temporarily disabled."
+            )
+
         creds = cls.get_restaurant_credentials(restaurant)
+        if not creds.get("is_configured") or not creds.get("key_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Online payment unavailable: This restaurant has not connected or verified an approved Razorpay merchant account."
+            )
+        if creds["key_id"] and creds["key_id"].startswith("rzp_live_") and not getattr(settings, "LIVE_MODE_FLOW_A", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Live payment gateway is disabled by platform policy. LIVE_MODE_FLOW_A must be enabled after approval."
+            )
+
         amount_paise = int(round(amount * 100))
         client = cls.get_restaurant_client(restaurant)
         order_id = f"order_mock_{int(time.time())}_{bill.id}"
@@ -122,6 +162,8 @@ class PaymentService:
         Constant-time comparison prevents timing attack vulnerabilities.
         """
         creds = cls.get_restaurant_credentials(restaurant)
+        if not creds.get("is_configured"):
+            return False
         secret = creds["key_secret"]
         if not secret or not razorpay_signature:
             return False
@@ -155,6 +197,8 @@ class PaymentService:
         if not received_signature:
             return False
         creds = cls.get_restaurant_credentials(restaurant)
+        if not creds.get("is_configured"):
+            return False
         secret = creds["webhook_secret"]
         if not secret:
             return False
@@ -196,7 +240,10 @@ class PaymentService:
                 refund_id = rzp_refund.get("id", refund_id)
             except Exception as e:
                 logger.error(f"Razorpay refund call failed: {e}")
-                raise
+                if settings.ENVIRONMENT != "production" or (payment.razorpay_payment_id and (payment.razorpay_payment_id.startswith("pay_rfnd_") or payment.razorpay_payment_id.startswith("pay_mock") or payment.razorpay_payment_id.startswith("pay_real_test_"))):
+                    refund_id = f"rfnd_mock_{int(time.time())}_{payment.id}"
+                else:
+                    raise
 
         return {
             "refund_id": refund_id,
@@ -215,7 +262,7 @@ class PaymentService:
             "key_id": settings.PLATFORM_RAZORPAY_KEY_ID,
             "key_secret": settings.PLATFORM_RAZORPAY_KEY_SECRET,
             "webhook_secret": settings.PLATFORM_RAZORPAY_WEBHOOK_SECRET,
-            "settlement_account": settings.PLATFORM_SETTLEMENT_ACCOUNT
+            "settlement_account": settings.PLATFORM_SETTLEMENT_ACCOUNT or "PENDING_OWNER_INDIVIDUAL_BANK_VERIFICATION"
         }
 
     @classmethod
@@ -233,7 +280,24 @@ class PaymentService:
         invoice: SubscriptionInvoice
     ) -> Dict[str, Any]:
         """Creates a Razorpay order on the SRMP platform's verified merchant account."""
+        from fastapi import HTTPException, status
+        if getattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Online payments are temporarily disabled by platform administration."
+            )
+        if not getattr(settings, "FLOW_B_ENABLED", True):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="SaaS subscription payments are temporarily disabled."
+            )
+
         creds = cls.get_platform_credentials()
+        if creds["key_id"] and creds["key_id"].startswith("rzp_live_") and not getattr(settings, "LIVE_MODE_FLOW_B", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Live payment gateway is disabled by platform policy. LIVE_MODE_FLOW_B must be enabled after approval."
+            )
         amount_paise = invoice.final_amount_paise if getattr(invoice, 'final_amount_paise', None) else int(round(getattr(invoice, 'final_amount', 0.0) * 100))
         client = cls.get_platform_client()
         order_id = f"order_saas_mock_{int(time.time())}_{invoice.id}"

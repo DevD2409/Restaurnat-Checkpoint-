@@ -72,13 +72,27 @@ def backup_sqlite(db_path: Path) -> dict:
     print(f"          Size: {size_bytes} bytes | SHA256: {checksum[:12]}...")
     return metadata
 
+def find_pg_binary(name: str) -> str:
+    which_bin = shutil.which(name)
+    if which_bin:
+        return which_bin
+    try:
+        import pgserver
+        pg_bin = Path(pgserver.__file__).parent / "pginstall" / "bin" / f"{name}.exe"
+        if pg_bin.exists():
+            return str(pg_bin)
+    except Exception:
+        pass
+    return name
+
 def backup_postgres(database_url: str) -> dict:
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     backup_filename = f"smart_restaurant_pg_{timestamp}.dump"
     backup_target = BACKUP_DIR / backup_filename
 
-    cmd = ["pg_dump", "-Fc", "--no-owner", "--no-acl", "-d", database_url, "-f", str(backup_target)]
-    print(f"[INFO] Executing PostgreSQL pg_dump to {backup_target}...")
+    pg_dump_bin = find_pg_binary("pg_dump")
+    cmd = [pg_dump_bin, "-Fc", "--no-owner", "--no-acl", "-d", database_url, "-f", str(backup_target)]
+    print(f"[INFO] Executing PostgreSQL pg_dump ({pg_dump_bin}) to {backup_target}...")
     subprocess.run(cmd, check=True)
 
     checksum = compute_sha256(backup_target)

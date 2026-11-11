@@ -1,20 +1,54 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import verify_password, get_password_hash, create_access_token
+from app.core.security import (
+    verify_password,
+    get_password_hash,
+    create_access_token,
+    is_blocked_demo_password,
+    is_demo_seed_account,
+)
 from app.core.dependencies import get_current_user, require_roles, get_tenant_id
 from app.core.rate_limiter import login_limiter
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
-from app.schemas.auth import Token, LoginRequest, UserCreate, UserUpdate, UserResponse
+from app.schemas.auth import Token, LoginRequest, UserCreate, UserUpdate, UserResponse, ChangePasswordRequest
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Staff"])
+
+
+def _enforce_production_credential_policy(
+    password: Optional[str] = None,
+    email: Optional[str] = None,
+) -> None:
+    """Reject known demo passwords or reserved demo seed accounts in production."""
+    if settings.ENVIRONMENT.lower() != "production":
+        return
+    if password and is_blocked_demo_password(password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Demo passwords are prohibited in production."
+        )
+    if email and is_demo_seed_account(email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Demo accounts are prohibited in production."
+        )
 
 @router.post("/login", response_model=Token)
 def login(login_data: LoginRequest, request: Request, db: Session = Depends(get_db)):
     # 1. Enforce rate limiting and brute force protection
     login_limiter.check(request, login_data.username)
+
+    is_prod = settings.ENVIRONMENT.lower() == "production"
+    if is_prod and is_blocked_demo_password(login_data.password):
+        login_limiter.record_failure(request, login_data.username)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo credentials are disabled in production"
+        )
 
     # 2. Authenticate by username or email
     user = db.query(User).filter(
@@ -26,6 +60,13 @@ def login(login_data: LoginRequest, request: Request, db: Session = Depends(get_
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password"
+        )
+
+    if is_prod and is_demo_seed_account(user.email):
+        login_limiter.record_failure(request, login_data.username)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo accounts are disabled in production"
         )
     
     if not user.is_active:
@@ -55,8 +96,38 @@ def login(login_data: LoginRequest, request: Request, db: Session = Depends(get_
         "full_name": user.full_name,
         "username": user.username,
         "restaurant_id": user.restaurant_id,
-        "restaurant_slug": restaurant_slug
+        "restaurant_slug": restaurant_slug,
+        "must_change_password": bool(user.must_change_password)
     }
+
+@router.post("/change-password")
+def change_password(
+    pwd_data: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Enforces secure self-service password change, clearing the must_change_password flag."""
+    if not verify_password(pwd_data.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    if len(pwd_data.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 8 characters long"
+        )
+    if pwd_data.current_password == pwd_data.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password"
+        )
+    _enforce_production_credential_policy(password=pwd_data.new_password)
+
+    current_user.hashed_password = get_password_hash(pwd_data.new_password)
+    current_user.must_change_password = False
+    db.commit()
+    return {"message": "Password updated successfully"}
 
 @router.get("/me", response_model=UserResponse)
 def read_current_user(current_user: User = Depends(get_current_user)):
@@ -87,6 +158,7 @@ def create_staff(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(STAFF_MANAGERS))
 ):
+    _enforce_production_credential_policy(password=staff_data.password, email=staff_data.email)
     existing = db.query(User).filter(
         (User.email == staff_data.email) | (User.username == staff_data.username)
     ).first()
@@ -147,6 +219,11 @@ def update_staff(
         staff.shift = staff_update.shift
     if staff_update.is_active is not None:
         staff.is_active = staff_update.is_active
+    if staff_update.email is not None or staff_update.password:
+        _enforce_production_credential_policy(
+            password=staff_update.password,
+            email=staff_update.email,
+        )
     if staff_update.password:
         staff.hashed_password = get_password_hash(staff_update.password)
 

@@ -521,6 +521,8 @@ export interface SubscriptionInvoice {
   discount_paise: number;
   discount_inr: number;
   discount_amount?: number;
+  taxable_paise?: number;
+  taxable_inr?: number;
   tax_percentage: number;
   tax_paise: number;
   tax_inr: number;
@@ -530,10 +532,22 @@ export interface SubscriptionInvoice {
   final_amount?: number;
   currency: string;
   status: 'UNPAID' | 'PAID' | 'VOID' | 'REFUNDED';
+  is_tax_inclusive?: boolean;
+  is_gst_registered?: boolean;
+  document_type?: 'PAYMENT_RECEIPT' | 'TAX_INVOICE';
   billing_start_date?: string;
   billing_end_date?: string;
   paid_at?: string;
   created_at: string;
+  tax_type?: 'UNREGISTERED_NO_GST' | 'INTRA_STATE' | 'INTER_STATE';
+  cgst_paise?: number;
+  sgst_paise?: number;
+  igst_paise?: number;
+  cgst_inr?: number;
+  sgst_inr?: number;
+  igst_inr?: number;
+  recipient_gstin?: string;
+  supplier_gstin?: string;
   payments?: SubscriptionPayment[];
 }
 
@@ -569,13 +583,66 @@ export interface SubscriptionCheckoutPreview {
   subtotal_inr: number;
   discount_paise: number;
   discount_inr: number;
+  taxable_paise?: number;
+  taxable_inr?: number;
+  tax_percentage?: number;
   tax_paise: number;
   tax_inr: number;
   final_amount_paise: number;
   final_amount_inr: number;
+  convenience_fee_paise?: number;
+  is_tax_inclusive?: boolean;
+  is_gst_registered?: boolean;
+  document_type?: 'PAYMENT_RECEIPT' | 'TAX_INVOICE';
   coupon_code?: string;
   billing_start_date: string;
   billing_end_date: string;
+  tax_type?: 'UNREGISTERED_NO_GST' | 'INTRA_STATE' | 'INTER_STATE';
+  cgst_paise?: number;
+  sgst_paise?: number;
+  igst_paise?: number;
+  cgst_inr?: number;
+  sgst_inr?: number;
+  igst_inr?: number;
+  recipient_gstin?: string;
+  is_gstin_valid?: boolean;
+}
+
+export interface ComplianceEntityInfo {
+  business_operating_model: string;
+  owner_legal_name?: string;
+  is_owner_legal_name_configured: boolean;
+  brand_trade_name: string;
+  business_identity_status: string;
+  is_business_identity_verified: boolean;
+  pan?: string;
+  is_pan_configured: boolean;
+  business_address?: string;
+  is_address_configured: boolean;
+  is_gst_registered: boolean;
+  gstin?: string;
+  is_gstin_verified: boolean;
+  is_gst_rate_ca_confirmed: boolean;
+  gst_rate_percentage: number;
+  supplier_state_code?: string;
+  sac_code?: string;
+  sac_description?: string;
+  is_sac_approved_by_ca: boolean;
+  settlement_account_ref?: string;
+  settlement_bank_name?: string;
+  is_bank_account_verified: boolean;
+  production_domain?: string;
+  is_production_domain_configured: boolean;
+  support_email?: string;
+  is_support_email_configured: boolean;
+  grievance_email?: string;
+  is_grievance_email_configured: boolean;
+  telephone_helpline?: string;
+  is_telephone_configured: boolean;
+  grievance_contact_name?: string;
+  is_grievance_contact_configured: boolean;
+  refund_policy_status: string;
+  is_refund_policy_approved: boolean;
 }
 
 

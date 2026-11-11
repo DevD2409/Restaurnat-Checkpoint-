@@ -1,10 +1,18 @@
 import re
+import time
 from typing import Optional
 from pydantic import BaseModel, EmailStr
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import get_password_hash, create_access_token, generate_table_qr_token
+from app.core.security import (
+    get_password_hash,
+    create_access_token,
+    generate_table_qr_token,
+    is_blocked_demo_password,
+    is_demo_seed_account,
+)
 from app.models.restaurant import Restaurant
 from app.models.user import User, UserRole
 from app.models.table import Table, TableStatus
@@ -85,7 +93,14 @@ def onboard_restaurant(data: OnboardingRegisterRequest, db: Session = Depends(ge
     if existing_restaurant:
         raise HTTPException(status_code=400, detail=f"Restaurant slug '{slug}' is already registered. Please choose another.")
 
-    # 2. Check owner username / email
+    # 2. Check owner username / email & production credential policy
+    if settings.ENVIRONMENT.lower() == "production":
+        if is_blocked_demo_password(data.owner_password) or is_demo_seed_account(str(data.owner_email)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Demo passwords and reserved demo email addresses are prohibited in production."
+            )
+
     existing_user = db.query(User).filter(
         (User.username == data.owner_username) | (User.email == data.owner_email)
     ).first()

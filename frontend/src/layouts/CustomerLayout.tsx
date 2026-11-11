@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useParams } from 'react-router-dom';
-import axios from 'axios';
 import {
   Utensils, ShoppingBag, Bell, Wifi, SplitSquareVertical,
   Calendar, CheckCircle2, X
 } from 'lucide-react';
 import { useCart } from '../context/CartContext';
-import { serviceRequestApi } from '../services/api';
+import { apiClient, serviceRequestApi } from '../services/api';
 
 export const CustomerLayout: React.FC = () => {
   const { tenantSlug, qrToken } = useParams<{ tenantSlug?: string; qrToken?: string }>();
@@ -33,7 +32,7 @@ export const CustomerLayout: React.FC = () => {
     const fetchBranding = async () => {
       try {
         if (tenantSlug) {
-          const res = await axios.get(`/api/v1/restaurants/by-slug/${tenantSlug}`);
+          const res = await apiClient.get(`/restaurants/by-slug/${tenantSlug}`);
           if (res.data) {
             setRestaurantProfile({
               name: res.data.name || 'Smart Restaurant',
@@ -46,7 +45,7 @@ export const CustomerLayout: React.FC = () => {
             }
           }
         } else {
-          const res = await axios.get('/api/v1/restaurants/');
+          const res = await apiClient.get('/restaurants/');
           if (res.data) {
             setRestaurantProfile({
               name: res.data.name,

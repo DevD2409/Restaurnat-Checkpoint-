@@ -41,30 +41,30 @@ def run_migration():
     )
     """)
 
-    # Seed the exact Monthly (₹1,999) & Yearly (₹11,999) plans
+    # Seed the exact Monthly (₹999) & Yearly (₹9,999) tax-inclusive plans
     plans = [
         (
             "MONTHLY",
-            "Monthly Growth Plan",
+            "Monthly Plan",
             "MONTHLY",
-            199900,  # ₹1,999 in paise
+            99900,  # ₹999 in paise (tax-inclusive)
             "INR",
             30,
-            "Digital QR Menu, KDS Access, Table Operations, Analytics, Split Billing",
-            json.dumps({"max_tables": 30, "kds_access": True, "advanced_analytics": True, "custom_branding": True, "multi_branch": False}),
-            30,
+            "Unlimited Digital Menus & QR Ordering,Real-Time KDS & Waiter Notifications,Customer Feedback & Analytics,Direct-to-Merchant UPI & Cards,All Applicable Taxes Included",
+            json.dumps({"max_tables": 100, "kds_access": True, "advanced_analytics": True, "custom_branding": True, "multi_branch": False}),
+            100,
             1
         ),
         (
             "YEARLY",
-            "Yearly Enterprise Value Plan",
+            "Yearly Plan",
             "YEARLY",
-            1199900,  # ₹11,999 in paise (12 months)
+            999900,  # ₹9,999 in paise (12 months, tax-inclusive)
             "INR",
             365,
-            "Unlimited Tables, Multi-Branch Management, Custom Theme Branding, Priority Support, Dedicated Account Manager",
-            json.dumps({"max_tables": 999, "kds_access": True, "advanced_analytics": True, "custom_branding": True, "multi_branch": True, "priority_support": True}),
-            999,
+            "All Monthly Plan Features,2 Months Effective Savings vs Monthly,Priority Onboarding Support,Direct-to-Merchant Settlement,All Applicable Taxes Included",
+            json.dumps({"max_tables": 250, "kds_access": True, "advanced_analytics": True, "custom_branding": True, "multi_branch": True, "priority_support": True}),
+            250,
             1
         )
     ]
@@ -95,32 +95,6 @@ def run_migration():
     expiry = datetime.now() + timedelta(days=365)
     start = datetime.now() - timedelta(days=1)
     coupons = [
-        (
-            "MONTHLY999",
-            100000,  # ₹1,000 off -> reduces ₹1,999 to ₹999
-            "FIXED_AMOUNT",
-            0.0,
-            "MONTHLY",
-            start.isoformat(),
-            expiry.isoformat(),
-            500,
-            1,
-            0,
-            1
-        ),
-        (
-            "YEARLY9999",
-            200000,  # ₹2,000 off -> reduces ₹11,999 to ₹9,999
-            "FIXED_AMOUNT",
-            0.0,
-            "YEARLY",
-            start.isoformat(),
-            expiry.isoformat(),
-            500,
-            1,
-            0,
-            1
-        ),
         (
             "LAUNCH50",
             0,
@@ -164,7 +138,7 @@ def run_migration():
         billing_cycle VARCHAR(20) DEFAULT 'MONTHLY',
         subtotal_paise INTEGER NOT NULL,
         discount_paise INTEGER DEFAULT 0,
-        tax_percentage FLOAT DEFAULT 18.0,
+        tax_percentage FLOAT DEFAULT 0.0,
         tax_paise INTEGER DEFAULT 0,
         final_amount_paise INTEGER NOT NULL,
         currency VARCHAR(10) DEFAULT 'INR',

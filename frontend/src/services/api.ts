@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getApiBaseUrl } from '../config/runtime';
 import {
   User, Restaurant, Table, MenuCategory, MenuItem,
   Order, ServiceRequest, Reservation, Bill, BillSplit,
@@ -6,7 +7,7 @@ import {
   Feedback, FeedbackAnalytics
 } from '../types';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const API_BASE = getApiBaseUrl();
 
 export const apiClient = axios.create({
   baseURL: API_BASE,
@@ -23,6 +24,23 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+
+// Reject HTML SPA-fallback responses cleanly so unconfigured hosts fail softly instead of crashing callers expecting JSON arrays/objects
+apiClient.interceptors.response.use(
+  (response) => {
+    const contentType = String(response.headers?.['content-type'] || '');
+    if (
+      contentType.includes('text/html') ||
+      (typeof response.data === 'string' && /^\s*<!doctype\s+html/i.test(response.data))
+    ) {
+      return Promise.reject(
+        new Error('Backend API returned HTML instead of JSON. Configure VITE_API_URL to point to the backend server.')
+      );
+    }
+    return response;
+  },
+  (error) => Promise.reject(error)
+);
 
 // Auth & Staff API
 export const authApi = {
@@ -273,6 +291,10 @@ export const billingApi = {
 
 // Subscriptions & SaaS Ledger API (Flow B)
 export const subscriptionsApi = {
+  getComplianceInfo: async () => {
+    const res = await apiClient.get('/subscriptions/compliance/info');
+    return res.data;
+  },
   getPlans: async () => {
     const res = await apiClient.get('/subscriptions/plans');
     return res.data;

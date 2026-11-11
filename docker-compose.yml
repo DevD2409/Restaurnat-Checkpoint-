@@ -6,15 +6,15 @@ services:
     container_name: smart_restaurant_postgres
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword2026
-      POSTGRES_DB: smart_restaurant_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your environment or .env before starting}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_restaurant_db}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -29,10 +29,13 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://postgres:postgrespassword2026@db:5432/smart_restaurant_db
-      SECRET_KEY: smart-restaurant-production-secret-jwt-key-2026
-      RAZORPAY_KEY_ID: rzp_test_placeholder_key
-      RAZORPAY_KEY_SECRET: rzp_test_placeholder_secret
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your environment or .env before starting}@db:5432/${POSTGRES_DB:-smart_restaurant_db}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in your environment or .env before starting}
+      QR_SECRET: ${QR_SECRET:?Set QR_SECRET in your environment or .env before starting}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-rzp_test_placeholder_key}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-rzp_test_placeholder_secret}
     ports:
       - "8000:8000"
 

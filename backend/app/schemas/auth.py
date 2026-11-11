@@ -10,6 +10,7 @@ class Token(BaseModel):
     username: str
     restaurant_id: Optional[int] = None
     restaurant_slug: Optional[str] = None
+    must_change_password: bool = False
 
 class TokenPayload(BaseModel):
     sub: Optional[str] = None
@@ -49,6 +50,11 @@ class UserResponse(BaseModel):
     phone_number: Optional[str] = None
     shift: Optional[str] = None
     is_active: bool
+    must_change_password: bool = False
 
     class Config:
         from_attributes = True
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str

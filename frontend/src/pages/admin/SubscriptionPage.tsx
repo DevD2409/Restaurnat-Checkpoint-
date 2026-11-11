@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   CreditCard, Sparkles, CheckCircle2, AlertTriangle, Clock,
   ShieldCheck, ArrowRight, Tag, Receipt, Download, RefreshCw,
@@ -10,7 +11,8 @@ import {
   SubscriptionInvoice,
   RestaurantSubscriptionStatus,
   SubscriptionNotification,
-  SubscriptionCheckoutPreview
+  SubscriptionCheckoutPreview,
+  ComplianceEntityInfo
 } from '../../types';
 
 declare global {
@@ -26,6 +28,7 @@ export const SubscriptionPage: React.FC = () => {
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [invoices, setInvoices] = useState<SubscriptionInvoice[]>([]);
   const [notifications, setNotifications] = useState<SubscriptionNotification[]>([]);
+  const [entityInfo, setEntityInfo] = useState<ComplianceEntityInfo | null>(null);
 
   // Selection & Checkout state
   const [selectedPlanCode, setSelectedPlanCode] = useState<string>('MONTHLY');
@@ -42,16 +45,18 @@ export const SubscriptionPage: React.FC = () => {
   const loadData = async () => {
     try {
       setRefreshing(true);
-      const [statusRes, plansRes, invoicesRes, notifsRes] = await Promise.all([
+      const [statusRes, plansRes, invoicesRes, notifsRes, complianceRes] = await Promise.all([
         subscriptionsApi.getMyStatus(),
         subscriptionsApi.getPlans(),
         subscriptionsApi.getInvoices(),
-        subscriptionsApi.getNotifications()
+        subscriptionsApi.getNotifications(),
+        subscriptionsApi.getComplianceInfo().catch(() => null)
       ]);
       setStatusData(statusRes);
       setPlans(plansRes);
       setInvoices(invoicesRes);
       setNotifications(notifsRes);
+      if (complianceRes) setEntityInfo(complianceRes);
 
       // Default selected plan
       if (plansRes && plansRes.length > 0) {
@@ -404,12 +409,14 @@ export const SubscriptionPage: React.FC = () => {
               <Layers className="w-5 h-5 text-amber-400" />
               <span>Select Subscription Tier</span>
             </h2>
-            <p className="text-xs text-zinc-400">All prices authoritative, stored in integer paise. 18% GST applies.</p>
+            <p className="text-xs text-zinc-400">
+              Direct tax-inclusive pricing stored in integer paise. Zero hidden taxes or convenience fees added at checkout.
+            </p>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Plan 1: Monthly Growth Plan (₹1,999) */}
+          {/* Plan 1: Monthly Plan (₹999 inclusive of applicable taxes) */}
           <div
             onClick={() => handleSelectPlan('MONTHLY')}
             className={`p-6 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
@@ -427,14 +434,16 @@ export const SubscriptionPage: React.FC = () => {
 
             <div className="space-y-4">
               <div>
-                <span className="text-xs font-bold text-amber-400 uppercase tracking-wider block">Starter & Growth</span>
-                <h3 className="text-xl font-bold text-white mt-1">Monthly Growth Plan</h3>
+                <span className="text-xs font-bold text-amber-400 uppercase tracking-wider block">Standard Monthly</span>
+                <h3 className="text-xl font-bold text-white mt-1">Monthly Plan</h3>
                 <p className="text-xs text-zinc-400 mt-1">Ideal for single-location restaurants seeking complete digitized flow</p>
               </div>
 
               <div className="flex items-baseline space-x-2">
-                <span className="text-3xl font-extrabold text-white">₹1,999</span>
-                <span className="text-xs text-zinc-400">/ month (199,900 paise)</span>
+                <span className="text-3xl font-extrabold text-white">
+                  ₹{(plans.find((p) => p.plan_code === 'MONTHLY')?.price_inr ?? 999).toLocaleString('en-IN')}
+                </span>
+                <span className="text-xs text-zinc-400">/month (inclusive of applicable taxes)</span>
               </div>
 
               <div className="pt-2 border-t border-zinc-800 space-y-2.5">
@@ -442,7 +451,7 @@ export const SubscriptionPage: React.FC = () => {
                 <ul className="space-y-2 text-xs text-zinc-300">
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span>Up to 30 Interactive QR Tables</span>
+                    <span>Unlimited Digital Menus & Interactive QR Tables</span>
                   </li>
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
@@ -454,11 +463,11 @@ export const SubscriptionPage: React.FC = () => {
                   </li>
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span>Split Billing & Digital Razorpay Invoicing</span>
+                    <span>Split Billing & Direct-to-Merchant Settlement</span>
                   </li>
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span>GST Reporting & Hourly Sales Analytics</span>
+                    <span>Customer Feedback & Analytics Dashboard</span>
                   </li>
                 </ul>
               </div>
@@ -473,13 +482,13 @@ export const SubscriptionPage: React.FC = () => {
                     : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
                 }`}
               >
-                <span>{selectedPlanCode === 'MONTHLY' ? 'Currently Selected' : 'Choose Monthly'}</span>
+                <span>{selectedPlanCode === 'MONTHLY' ? 'Currently Selected' : 'Choose Monthly — ₹999/mo'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </div>
 
-          {/* Plan 2: Yearly Enterprise Value Plan (₹11,999) */}
+          {/* Plan 2: Yearly Plan (₹9,999 inclusive of applicable taxes) */}
           <div
             onClick={() => handleSelectPlan('YEARLY')}
             className={`p-6 rounded-2xl border transition-all cursor-pointer relative flex flex-col justify-between ${
@@ -490,7 +499,7 @@ export const SubscriptionPage: React.FC = () => {
           >
             <div className="absolute top-4 right-4 flex items-center space-x-2">
               <span className="bg-gradient-to-r from-amber-500 to-orange-500 text-black text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full">
-                Save ₹11,989 / yr
+                Save ₹1,989 / yr
               </span>
               {selectedPlanCode === 'YEARLY' && (
                 <div className="bg-amber-500 text-black text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full flex items-center space-x-1">
@@ -502,14 +511,16 @@ export const SubscriptionPage: React.FC = () => {
 
             <div className="space-y-4">
               <div>
-                <span className="text-xs font-bold text-orange-400 uppercase tracking-wider block">Enterprise & Multi-Branch</span>
-                <h3 className="text-xl font-bold text-white mt-1">Yearly Enterprise Value Plan</h3>
-                <p className="text-xs text-zinc-400 mt-1">Maximum savings for established restaurants & boutique hotels</p>
+                <span className="text-xs font-bold text-orange-400 uppercase tracking-wider block">Annual Value Plan</span>
+                <h3 className="text-xl font-bold text-white mt-1">Yearly Plan</h3>
+                <p className="text-xs text-zinc-400 mt-1">Maximum savings for growing restaurants with full annual continuity</p>
               </div>
 
               <div className="flex items-baseline space-x-2">
-                <span className="text-3xl font-extrabold text-white">₹11,999</span>
-                <span className="text-xs text-zinc-400">/ 12 months (1,199,900 paise)</span>
+                <span className="text-3xl font-extrabold text-white">
+                  ₹{(plans.find((p) => p.plan_code === 'YEARLY')?.price_inr ?? 9999).toLocaleString('en-IN')}
+                </span>
+                <span className="text-xs text-zinc-400">/year (inclusive of applicable taxes)</span>
               </div>
 
               <div className="pt-2 border-t border-zinc-800 space-y-2.5">
@@ -525,7 +536,7 @@ export const SubscriptionPage: React.FC = () => {
                   </li>
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span>Custom Brand Logo, Color Theme & GST Bill Header</span>
+                    <span>Custom Brand Logo, Color Theme & Digital Bill Header</span>
                   </li>
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
@@ -533,7 +544,7 @@ export const SubscriptionPage: React.FC = () => {
                   </li>
                   <li className="flex items-center space-x-2">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    <span>Advanced Predictive Menu Demand Insights</span>
+                    <span>Nearly 2 Months Free Compared to Monthly Billing</span>
                   </li>
                 </ul>
               </div>
@@ -548,7 +559,7 @@ export const SubscriptionPage: React.FC = () => {
                     : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
                 }`}
               >
-                <span>{selectedPlanCode === 'YEARLY' ? 'Currently Selected' : 'Choose Yearly (Best Value)'}</span>
+                <span>{selectedPlanCode === 'YEARLY' ? 'Currently Selected' : 'Choose Yearly — ₹9,999/yr'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
@@ -561,13 +572,15 @@ export const SubscriptionPage: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold text-white flex items-center space-x-2">
             <Tag className="w-5 h-5 text-amber-400" />
-            <span>Apply Coupon & Review Order</span>
+            <span>Apply Promo Voucher & Review Checkout</span>
           </h2>
-          <p className="text-xs text-zinc-400">Enter a promotion voucher code to apply instant savings</p>
+          <p className="text-xs text-zinc-400">
+            Plans are already offered at direct tax-inclusive pricing (₹999/month, ₹9,999/year). Apply a valid voucher below if issued.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-          {/* Coupon Input & Promotion Suggestions */}
+          {/* Coupon Input & Transparent Pricing Note */}
           <div className="space-y-4">
             <form onSubmit={handleApplyCoupon} className="flex gap-2">
               <div className="relative flex-1">
@@ -575,7 +588,7 @@ export const SubscriptionPage: React.FC = () => {
                   type="text"
                   value={couponCode}
                   onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                  placeholder="e.g. MONTHLY999, YEARLY9999"
+                  placeholder="Enter promotional code (optional)"
                   className="w-full px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-700/80 text-white placeholder-zinc-500 text-xs font-mono uppercase focus:outline-none focus:border-amber-500"
                 />
               </div>
@@ -610,38 +623,15 @@ export const SubscriptionPage: React.FC = () => {
               </div>
             )}
 
-            {/* Quick Coupon Suggestions */}
-            <div className="p-4 bg-zinc-900/60 rounded-xl border border-zinc-800 space-y-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 block">Available Promotional Codes:</span>
-              <div className="space-y-1.5">
-                <div
-                  onClick={() => {
-                    setCouponCode('MONTHLY999');
-                    handleSelectPlan('MONTHLY');
-                  }}
-                  className="p-2 rounded-lg bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700/60 flex items-center justify-between cursor-pointer text-xs"
-                >
-                  <div className="flex items-center space-x-2">
-                    <span className="font-mono font-bold text-amber-400">MONTHLY999</span>
-                    <span className="text-zinc-400 text-[11px]">— ₹1,000 off Monthly plan (reduces ₹1,999 to ₹999)</span>
-                  </div>
-                  <span className="text-[10px] text-amber-400 underline font-semibold">Use</span>
-                </div>
-
-                <div
-                  onClick={() => {
-                    setCouponCode('YEARLY9999');
-                    handleSelectPlan('YEARLY');
-                  }}
-                  className="p-2 rounded-lg bg-zinc-800/60 hover:bg-zinc-800 border border-zinc-700/60 flex items-center justify-between cursor-pointer text-xs"
-                >
-                  <div className="flex items-center space-x-2">
-                    <span className="font-mono font-bold text-amber-400">YEARLY9999</span>
-                    <span className="text-zinc-400 text-[11px]">— ₹2,000 off Yearly plan (reduces ₹11,999 to ₹9,999)</span>
-                  </div>
-                  <span className="text-[10px] text-amber-400 underline font-semibold">Use</span>
-                </div>
-              </div>
+            <div className="p-4 bg-zinc-900/60 rounded-xl border border-zinc-800 space-y-2 text-xs text-zinc-300">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400 block">
+                Transparent Direct Pricing Guarantee
+              </span>
+              <ul className="space-y-1.5 text-[11px] text-zinc-400 list-disc pl-4">
+                <li>Monthly Plan: <strong className="text-zinc-200">₹999/month (inclusive of applicable taxes)</strong></li>
+                <li>Yearly Plan: <strong className="text-zinc-200">₹9,999/year (inclusive of applicable taxes)</strong></li>
+                <li>Zero compulsory convenience fees or post-discount surcharge added at payment gateway checkout.</li>
+              </ul>
             </div>
           </div>
 
@@ -657,36 +647,64 @@ export const SubscriptionPage: React.FC = () => {
                 <span className="font-semibold text-white">{preview?.name || selectedPlanCode}</span>
               </div>
               <div className="flex justify-between text-zinc-300">
-                <span>Base Plan Subtotal</span>
+                <span>Plan Price (Inclusive)</span>
                 <span>
-                  ₹{preview?.subtotal_inr.toFixed(2) || (selectedPlanCode === 'YEARLY' ? '11999.00' : '1999.00')}{' '}
+                  ₹{preview?.subtotal_inr.toFixed(2) || (selectedPlanCode === 'YEARLY' ? '9999.00' : '999.00')}{' '}
                   <span className="text-zinc-500 font-mono text-[10px]">({preview?.subtotal_paise || 0} paise)</span>
                 </span>
               </div>
 
               {preview && preview.discount_paise > 0 && (
                 <div className="flex justify-between text-emerald-400 font-medium">
-                  <span>Coupon Discount ({preview.coupon_code})</span>
+                  <span>Promo Voucher ({preview.coupon_code})</span>
                   <span>-₹{preview.discount_inr.toFixed(2)}</span>
                 </div>
               )}
 
-              <div className="flex justify-between text-zinc-300">
-                <span>Platform GST (18%)</span>
-                <span>
-                  +₹{preview?.tax_inr.toFixed(2) || '0.00'}{' '}
-                  <span className="text-zinc-500 font-mono text-[10px]">({preview?.tax_paise || 0} paise)</span>
-                </span>
-              </div>
+              {preview?.is_gst_registered ? (
+                <div className="space-y-1 p-2.5 rounded-lg bg-zinc-800/50 border border-zinc-800">
+                  <div className="flex justify-between text-zinc-300">
+                    <span>Taxable Value (Before Included GST)</span>
+                    <span>₹{(preview.taxable_inr ?? 0).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-zinc-400">
+                    <span>
+                      Included {preview.tax_type === 'INTER_STATE' ? 'IGST' : 'GST'} ({preview.tax_percentage || 18}% — not added on top)
+                    </span>
+                    <span>₹{preview.tax_inr.toFixed(2)}</span>
+                  </div>
+                  {preview.tax_type === 'INTRA_STATE' && (
+                    <div className="flex justify-between text-[11px] text-zinc-500 pl-2">
+                      <span>• CGST: ₹{(preview.cgst_inr ?? 0).toFixed(2)}</span>
+                      <span>• SGST: ₹{(preview.sgst_inr ?? 0).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {preview.tax_type === 'INTER_STATE' && (
+                    <div className="flex justify-between text-[11px] text-zinc-500 pl-2">
+                      <span>• IGST: ₹{(preview.igst_inr ?? 0).toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1 p-2.5 rounded-lg bg-zinc-800/50 border border-zinc-800">
+                  <div className="flex justify-between text-zinc-400">
+                    <span>Additional GST / Convenience Charges</span>
+                    <span>₹0.00</span>
+                  </div>
+                  <span className="block text-[10px] text-zinc-500">
+                    Operated by an individual / unregistered business (Non-GST Payment Receipt issued).
+                  </span>
+                </div>
+              )}
 
               <div className="pt-3 border-t border-zinc-800 flex justify-between items-baseline">
-                <span className="text-sm font-bold text-white">Total Payable Amount</span>
+                <span className="text-sm font-bold text-white">Final Payable Amount</span>
                 <div className="text-right">
                   <span className="text-2xl font-black text-amber-400">
-                    ₹{preview?.final_amount_inr.toFixed(2) || '0.00'}
+                    ₹{preview?.final_amount_inr.toFixed(2) || (selectedPlanCode === 'YEARLY' ? '9999.00' : '999.00')}
                   </span>
                   <span className="block text-[10px] text-zinc-500 font-mono">
-                    {preview?.final_amount_paise || 0} integer paise
+                    {preview?.final_amount_paise || 0} integer paise · All Taxes Included
                   </span>
                 </div>
               </div>
@@ -696,8 +714,7 @@ export const SubscriptionPage: React.FC = () => {
                   <div className="flex justify-between">
                     <span>New Billing Period:</span>
                     <strong className="text-zinc-200">
-                      {new Date(preview.billing_start_date).toLocaleDateString()} —{' '}
-                      {new Date(preview.billing_end_date).toLocaleDateString()}
+                      {preview.billing_start_date} — {preview.billing_end_date}
                     </strong>
                   </div>
                   <span className="block text-[10px] text-zinc-500">
@@ -720,10 +737,30 @@ export const SubscriptionPage: React.FC = () => {
               ) : (
                 <>
                   <Zap className="w-4 h-4" />
-                  <span>Proceed to Pay ₹{preview?.final_amount_inr.toFixed(2) || '0.00'}</span>
+                  <span>
+                    Proceed to Pay ₹{preview?.final_amount_inr.toFixed(2) || (selectedPlanCode === 'YEARLY' ? '9999.00' : '999.00')}
+                  </span>
                 </>
               )}
             </button>
+
+            <div className="pt-2 text-[10px] text-zinc-500 text-center leading-normal space-y-1">
+              <div>
+                By proceeding, you agree to our{' '}
+                <Link to="/terms" target="_blank" className="text-zinc-400 hover:text-amber-400 underline">Terms of Service</Link>,{' '}
+                <Link to="/privacy" target="_blank" className="text-zinc-400 hover:text-amber-400 underline">Privacy Policy</Link>, and{' '}
+                <Link to="/refund" target="_blank" className="text-amber-400 hover:text-amber-300 underline font-medium">Refund Policy (Draft Proposal)</Link>.
+              </div>
+              <div>
+                Operated by{' '}
+                <strong className="text-zinc-400">
+                  {entityInfo?.owner_legal_name || entityInfo?.brand_trade_name || 'SRMP Individual Platform Operator'}
+                </strong>
+                {entityInfo?.business_operating_model === 'INDIVIDUAL_UNREGISTERED' && (
+                  <span> · Individual Business</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -754,10 +791,10 @@ export const SubscriptionPage: React.FC = () => {
                   <th className="py-3 px-4">Plan / Cycle</th>
                   <th className="py-3 px-4">Subtotal</th>
                   <th className="py-3 px-4">Discount</th>
-                  <th className="py-3 px-4">GST (18%)</th>
+                  <th className="py-3 px-4">Tax Included</th>
                   <th className="py-3 px-4">Final Paid</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Receipt</th>
+                  <th className="py-3 px-4 text-right">Document</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60">
@@ -779,7 +816,9 @@ export const SubscriptionPage: React.FC = () => {
                     <td className="py-3.5 px-4 text-emerald-400">
                       {inv.discount_paise > 0 ? `-₹${inv.discount_inr.toFixed(2)}` : '—'}
                     </td>
-                    <td className="py-3.5 px-4 text-zinc-400">₹{inv.tax_inr.toFixed(2)}</td>
+                    <td className="py-3.5 px-4 text-zinc-400">
+                      {inv.tax_paise > 0 ? `₹${inv.tax_inr.toFixed(2)} incl.` : '₹0.00 (Non-GST)'}
+                    </td>
                     <td className="py-3.5 px-4 font-bold text-white">₹{inv.final_amount_inr.toFixed(2)}</td>
                     <td className="py-3.5 px-4">
                       {inv.status === 'PAID' ? (
@@ -809,7 +848,7 @@ export const SubscriptionPage: React.FC = () => {
         )}
       </div>
 
-      {/* Official Tax Invoice / Receipt Modal */}
+      {/* Official Tax Invoice / Non-GST Payment Receipt Modal */}
       {activeReceiptInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
           <div className="bg-[#12131a] border border-zinc-800 rounded-2xl w-full max-w-xl p-6 sm:p-8 space-y-6 shadow-2xl relative">
@@ -827,10 +866,26 @@ export const SubscriptionPage: React.FC = () => {
                   <div className="w-7 h-7 rounded-lg bg-amber-500 flex items-center justify-center font-bold text-black text-xs">
                     SRMP
                   </div>
-                  <span className="text-base font-bold text-white">Smart Restaurant SaaS</span>
+                  <span className="text-base font-bold text-white">
+                    {activeReceiptInvoice.is_gst_registered && activeReceiptInvoice.tax_paise > 0
+                      ? 'TAX INVOICE'
+                      : 'PAYMENT RECEIPT'}
+                  </span>
                 </div>
-                <span className="text-[10px] text-zinc-500 block mt-1">Cloud Hospitality Technologies Private Limited</span>
-                <span className="text-[10px] text-zinc-500 block">GSTIN: 27AABCS1429B1Z0 | HSN/SAC: 998314</span>
+                <span className="text-[10px] text-zinc-400 block mt-1">
+                  {entityInfo?.owner_legal_name || entityInfo?.brand_trade_name || 'SRMP Platform Operator'}
+                  {entityInfo?.business_operating_model === 'INDIVIDUAL_UNREGISTERED' ? ' (Individual Business)' : ''}
+                </span>
+                {activeReceiptInvoice.is_gst_registered && activeReceiptInvoice.supplier_gstin ? (
+                  <span className="text-[10px] text-zinc-500 block font-mono">
+                    GSTIN: {activeReceiptInvoice.supplier_gstin}
+                    {entityInfo?.sac_code ? ` | HSN/SAC: ${entityInfo.sac_code}` : ''}
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-zinc-500 block">
+                    Non-GST Payment Receipt · Unregistered Individual Business
+                  </span>
+                )}
               </div>
               <div className="text-right">
                 <span className="text-xs font-mono font-bold text-amber-400 block">{activeReceiptInvoice.invoice_number}</span>
@@ -845,9 +900,14 @@ export const SubscriptionPage: React.FC = () => {
 
             {/* Bill To */}
             <div className="bg-zinc-900/60 p-3 rounded-xl border border-zinc-800 text-xs space-y-0.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 block">Billed To (Tenant):</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 block">Issued To (Tenant):</span>
               <span className="font-semibold text-white block">{statusData?.restaurant_name}</span>
-              <span className="text-zinc-400 block text-[11px]">Restaurant ID: #{activeReceiptInvoice.restaurant_id}</span>
+              <div className="flex justify-between text-zinc-400 text-[11px]">
+                <span>Restaurant ID: #{activeReceiptInvoice.restaurant_id}</span>
+                {activeReceiptInvoice.recipient_gstin && (
+                  <span className="font-mono text-zinc-300">GSTIN: {activeReceiptInvoice.recipient_gstin}</span>
+                )}
+              </div>
             </div>
 
             {/* Line Items */}
@@ -868,18 +928,44 @@ export const SubscriptionPage: React.FC = () => {
 
               {activeReceiptInvoice.discount_paise > 0 && (
                 <div className="flex justify-between py-1 text-emerald-400">
-                  <span>Promotional Coupon Discount</span>
+                  <span>Promotional Voucher Discount</span>
                   <span>-₹{activeReceiptInvoice.discount_inr.toFixed(2)}</span>
                 </div>
               )}
 
-              <div className="flex justify-between py-1 text-zinc-400">
-                <span>GST @ 18% (CGST 9% + SGST 9%)</span>
-                <span>+₹{activeReceiptInvoice.tax_inr.toFixed(2)}</span>
-              </div>
+              {activeReceiptInvoice.is_gst_registered && activeReceiptInvoice.tax_paise > 0 ? (
+                <div className="space-y-0.5 py-1 text-zinc-400">
+                  <div className="flex justify-between">
+                    <span>Taxable Value (Before Included GST)</span>
+                    <span>₹{(activeReceiptInvoice.taxable_inr ?? (activeReceiptInvoice.final_amount_inr - activeReceiptInvoice.tax_inr)).toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>
+                      Included {activeReceiptInvoice.tax_type === 'INTER_STATE' ? 'IGST @ 18%' : 'GST @ 18% (CGST 9% + SGST 9%)'}
+                    </span>
+                    <span>₹{activeReceiptInvoice.tax_inr.toFixed(2)}</span>
+                  </div>
+                  {activeReceiptInvoice.tax_type !== 'INTER_STATE' && (
+                    <div className="flex justify-between text-[10px] text-zinc-500 pl-2">
+                      <span>CGST 9%: ₹{(activeReceiptInvoice.cgst_inr ?? (activeReceiptInvoice.tax_inr / 2)).toFixed(2)}</span>
+                      <span>SGST 9%: ₹{(activeReceiptInvoice.sgst_inr ?? (activeReceiptInvoice.tax_inr / 2)).toFixed(2)}</span>
+                    </div>
+                  )}
+                  {activeReceiptInvoice.tax_type === 'INTER_STATE' && (
+                    <div className="flex justify-between text-[10px] text-zinc-500 pl-2">
+                      <span>IGST 18%: ₹{(activeReceiptInvoice.igst_inr ?? activeReceiptInvoice.tax_inr).toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex justify-between py-1 text-zinc-400">
+                  <span>GST / Tax Charged (Unregistered Individual Business)</span>
+                  <span>₹0.00</span>
+                </div>
+              )}
 
               <div className="flex justify-between py-2 border-t border-zinc-800 text-sm font-bold text-white">
-                <span>Total Amount Paid</span>
+                <span>Total Amount Paid (Inclusive)</span>
                 <span className="text-amber-400">₹{activeReceiptInvoice.final_amount_inr.toFixed(2)}</span>
               </div>
             </div>

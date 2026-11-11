@@ -34,27 +34,27 @@ flowchart TD
 
 ---
 
-## 2. Platform Owner Setup (SaaS Business)
+## 2. Platform Owner Setup (SaaS Business — Individual / Unregistered Model)
 
-The Platform Owner operates the central multi-tenant SaaS business and collects recurring subscription fees from subscribing restaurants.
+The Platform Owner operates the central multi-tenant SaaS business as an **individual / unregistered business** (unless incorporated/GST credentials are later configured) and collects tax-inclusive subscription fees (₹999/month, ₹9,999/year).
 
-### Step 2.1: Platform Account Registration & Business KYC
-1. Register a corporate Razorpay merchant account at [dashboard.razorpay.com](https://dashboard.razorpay.com/).
-2. Submit business documents for KYC under the **SaaS / IT Services / Cloud Software** category:
-   - Certificate of Incorporation (CIN / GSTIN).
-   - Business PAN card.
-   - Corporate bank statement or cancelled cheque.
-   - Authorized signatory identity proof.
-3. In **Settings -> Bank Account**, link the primary corporate bank account of the SaaS platform. All subscription revenues will settle here.
+### Step 2.1: Platform Account Registration & Individual Business KYC
+1. Register a Razorpay merchant account at [dashboard.razorpay.com](https://dashboard.razorpay.com/) under **Individual / Sole Proprietor**.
+2. Submit authentic KYC documents under **SaaS / IT Services / Cloud Software**:
+   - Individual PAN card of the platform owner.
+   - Cancelled cheque or bank statement for the owner's verified individual bank account (do not fabricate corporate CIN/GSTIN if unregistered).
+   - Authorized signatory / owner Aadhaar/identity proof.
+3. In **Settings -> Bank Account**, link the owner's verified individual bank account. All SaaS subscription revenues settle here.
 
 ### Step 2.2: Generate Platform API Keys
 1. In the Razorpay Dashboard, navigate to **Settings -> API Keys**.
-2. Select **Generate Key** (or use **Generate Test Key** for staging).
+2. Select **Generate Test Key** for staging (keep `LIVE_MODE_FLOW_B=false` until KYC approval).
 3. Store the credentials securely in the SRMP backend environment:
    ```env
-   PLATFORM_RAZORPAY_KEY_ID="rzp_live_xxxxxxxxxxxxxxxx"
-   PLATFORM_RAZORPAY_KEY_SECRET="your_platform_live_key_secret"
-   PLATFORM_SETTLEMENT_ACCOUNT="ACC_SRMP_CORP_HDFC_00192"
+   PLATFORM_RAZORPAY_KEY_ID="rzp_test_xxxxxxxxxxxxxxxx"
+   PLATFORM_RAZORPAY_KEY_SECRET="your_platform_key_secret"
+   PLATFORM_SETTLEMENT_ACCOUNT="VERIFIED_INDIVIDUAL_BANK_REF"
+   BUSINESS_OPERATING_MODEL="INDIVIDUAL_UNREGISTERED"
    ```
 
 ### Step 2.3: Configure Platform Subscriptions Webhook

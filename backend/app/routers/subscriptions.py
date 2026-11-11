@@ -21,14 +21,32 @@ from app.schemas.subscription import (
     SubscriptionCheckoutRequest, SubscriptionCheckoutResponse,
     SubscriptionVerifyRequest, SubscriptionInvoiceResponse,
     SubscriptionRefundRequest, SubscriptionNotificationResponse,
-    RestaurantSubscriptionStatusResponse, PlatformSubscriptionAnalyticsResponse
+    RestaurantSubscriptionStatusResponse, PlatformSubscriptionAnalyticsResponse,
+    ComplianceEntityInfoResponse
 )
 from app.services.payment_service import PaymentService
+from app.services.gst_service import (
+    compute_subscription_tax_inclusive,
+    generate_statutory_invoice_number,
+    is_platform_gst_active,
+)
+from app.core.config import settings
 from app.websocket.connection_manager import manager
 
 router = APIRouter(prefix="/subscriptions", tags=["Flow B: SRMP SaaS Subscription & Coupon Management"])
 
+DEPRECATED_PRICING_COUPONS = {"MONTHLY999", "YEARLY9999"}
+
 # Helper: Parse coupon plan eligibility
+def _now_for(ref_dt: Optional[datetime] = None) -> datetime:
+    """Return current time matching timezone awareness of a persisted datetime."""
+    if ref_dt is None:
+        return datetime.now(timezone.utc)
+    if getattr(ref_dt, "tzinfo", None) is not None:
+        return datetime.now(timezone.utc)
+    return datetime.now()
+
+
 def is_plan_eligible_for_coupon(coupon: SubscriptionCoupon, plan_code: str) -> bool:
     if not coupon.eligible_plan_codes or coupon.eligible_plan_codes.strip() in ["*", "ALL"]:
         return True
@@ -42,8 +60,10 @@ def validate_coupon_logic(
     plan_code: str,
     restaurant_id: Optional[int] = None
 ) -> Tuple[bool, Optional[SubscriptionCoupon], str]:
-    from typing import Tuple
     clean_code = coupon_code.strip().upper()
+    if clean_code in DEPRECATED_PRICING_COUPONS:
+        return False, None, f"Coupon '{clean_code}' is retired and cannot be applied on the current direct ₹999 / ₹9,999 inclusive pricing"
+
     coupon = db.query(SubscriptionCoupon).filter(SubscriptionCoupon.code == clean_code).first()
     if not coupon:
         return False, None, f"Coupon code '{clean_code}' does not exist"
@@ -51,11 +71,10 @@ def validate_coupon_logic(
     if not coupon.is_active:
         return False, coupon, f"Coupon code '{clean_code}' is currently inactive"
 
-    now = datetime.now()
-    if coupon.start_date and now < coupon.start_date:
+    if coupon.start_date and _now_for(coupon.start_date) < coupon.start_date:
         return False, coupon, f"Coupon code '{clean_code}' is not active yet"
 
-    if coupon.end_date and now > coupon.end_date:
+    if coupon.end_date and _now_for(coupon.end_date) > coupon.end_date:
         return False, coupon, f"Coupon code '{clean_code}' has expired"
 
     if not is_plan_eligible_for_coupon(coupon, plan_code):
@@ -77,6 +96,72 @@ def validate_coupon_logic(
 # =============================================================================
 # PUBLIC & RESTAURANT OWNER SUBSCRIPTION APIS
 # =============================================================================
+
+@router.get("/compliance/info", response_model=ComplianceEntityInfoResponse)
+def get_compliance_entity_info():
+    """
+    Authoritative, configurable business identity, tax status, domain, and contact details.
+    Operates as an individual/unregistered business by default with zero fabricated defaults.
+    All unconfigured fields are explicitly marked pending.
+    """
+    owner_name = settings.OWNER_LEGAL_NAME.strip() if settings.OWNER_LEGAL_NAME else None
+    is_gst_active, clean_gstin, sup_state = is_platform_gst_active()
+    ca_confirmed = bool(getattr(settings, "IS_GST_RATE_CA_CONFIRMED", False))
+    sac_code = settings.SAC_CODE.strip() if settings.SAC_CODE else None
+    pan_val = settings.BUSINESS_PAN.strip().upper() if settings.BUSINESS_PAN else None
+    addr_val = settings.BUSINESS_ADDRESS.strip() if settings.BUSINESS_ADDRESS else None
+    bank_acct = settings.PLATFORM_SETTLEMENT_ACCOUNT.strip() if settings.PLATFORM_SETTLEMENT_ACCOUNT else None
+    bank_name = settings.PLATFORM_SETTLEMENT_BANK_NAME.strip() if settings.PLATFORM_SETTLEMENT_BANK_NAME else None
+    domain_val = settings.PRODUCTION_DOMAIN.strip() if settings.PRODUCTION_DOMAIN else None
+    support_email = settings.SUPPORT_EMAIL.strip() if settings.SUPPORT_EMAIL else None
+    grievance_email = settings.GRIEVANCE_EMAIL.strip() if settings.GRIEVANCE_EMAIL else None
+    phone_val = settings.TELEPHONE_HELPLINE.strip() if settings.TELEPHONE_HELPLINE else None
+    grievance_contact = settings.GRIEVANCE_CONTACT_NAME.strip() if settings.GRIEVANCE_CONTACT_NAME else None
+
+    identity_verified = bool(owner_name and pan_val and addr_val and bank_acct)
+    if settings.BUSINESS_IDENTITY_STATUS != "PENDING_OWNER_CONFIGURATION":
+        identity_status = settings.BUSINESS_IDENTITY_STATUS
+    elif identity_verified:
+        identity_status = "CONFIGURED_PENDING_RAZORPAY_KYC"
+    else:
+        identity_status = "PENDING_OWNER_CONFIGURATION"
+
+    return ComplianceEntityInfoResponse(
+        business_operating_model=settings.BUSINESS_OPERATING_MODEL,
+        owner_legal_name=owner_name,
+        is_owner_legal_name_configured=bool(owner_name),
+        brand_trade_name=settings.BRAND_TRADE_NAME,
+        business_identity_status=identity_status,
+        is_business_identity_verified=identity_verified,
+        pan=pan_val,
+        is_pan_configured=bool(pan_val),
+        business_address=addr_val,
+        is_address_configured=bool(addr_val),
+        is_gst_registered=is_gst_active,
+        gstin=clean_gstin if is_gst_active else None,
+        is_gstin_verified=is_gst_active,
+        is_gst_rate_ca_confirmed=ca_confirmed,
+        gst_rate_percentage=float(settings.GST_RATE_PERCENTAGE) if is_gst_active else 0.0,
+        supplier_state_code=sup_state if is_gst_active else None,
+        sac_code=sac_code if (is_gst_active and ca_confirmed) else None,
+        sac_description=settings.SAC_DESCRIPTION if (is_gst_active and ca_confirmed and settings.SAC_DESCRIPTION) else None,
+        is_sac_approved_by_ca=bool(is_gst_active and ca_confirmed and sac_code),
+        settlement_account_ref=bank_acct,
+        settlement_bank_name=bank_name,
+        is_bank_account_verified=bool(bank_acct and bank_name),
+        production_domain=domain_val,
+        is_production_domain_configured=bool(domain_val),
+        support_email=support_email,
+        is_support_email_configured=bool(support_email),
+        grievance_email=grievance_email,
+        is_grievance_email_configured=bool(grievance_email),
+        telephone_helpline=phone_val,
+        is_telephone_configured=bool(phone_val),
+        grievance_contact_name=grievance_contact or owner_name,
+        is_grievance_contact_configured=bool(grievance_contact or owner_name),
+        refund_policy_status="APPROVED" if settings.REFUND_POLICY_APPROVED else "DRAFT_PENDING_OWNER_APPROVAL",
+        is_refund_policy_approved=settings.REFUND_POLICY_APPROVED,
+    )
 
 @router.get("/plans", response_model=List[SubscriptionPlanResponse])
 def get_subscription_plans(db: Session = Depends(get_db)):
@@ -124,11 +209,7 @@ def validate_coupon_endpoint(data: CouponValidateRequest, db: Session = Depends(
             message=message
         )
 
-    # Calculate discount strictly in integer paise
-    if coupon.discount_type == "PERCENTAGE" and coupon.discount_percentage > 0:
-        discount_paise = int(round(plan.price_paise * (coupon.discount_percentage / 100.0)))
-    else:
-        discount_paise = min(plan.price_paise, coupon.discount_paise)
+    discount_paise = _compute_coupon_discount_paise(plan.price_paise, coupon)
 
     final_paise = max(0, plan.price_paise - discount_paise)
 
@@ -144,13 +225,54 @@ def validate_coupon_endpoint(data: CouponValidateRequest, db: Session = Depends(
         message=f"Coupon '{coupon.code}' applied successfully! Saved ₹{discount_paise / 100.0:.2f}"
     )
 
+def _compute_coupon_discount_paise(subtotal_paise: int, coupon: Optional[SubscriptionCoupon]) -> int:
+    """Computes integer paise discount from a validated coupon."""
+    if not coupon:
+        return 0
+    if coupon.discount_type == "PERCENTAGE" and coupon.discount_percentage > 0:
+        return int(round(subtotal_paise * (coupon.discount_percentage / 100.0)))
+    return min(subtotal_paise, coupon.discount_paise)
+
+
+def _build_tax_inclusive_checkout_pricing(
+    db: Session,
+    plan: SubscriptionPlan,
+    coupon_code: Optional[str],
+    restaurant_id: Optional[int],
+    recipient_gstin: Optional[str],
+) -> dict:
+    """
+    Shared tax-inclusive pricing calculation for subscription preview & checkout.
+    Subscription price (₹999 monthly / ₹9,999 yearly) is inclusive of all taxes.
+    """
+    subtotal_paise = plan.price_paise
+    discount_paise = 0
+    coupon_obj = None
+
+    if coupon_code:
+        is_valid, coupon_obj, msg = validate_coupon_logic(db, coupon_code, plan.plan_code, restaurant_id)
+        if not is_valid:
+            raise HTTPException(status_code=400, detail=msg)
+        discount_paise = _compute_coupon_discount_paise(subtotal_paise, coupon_obj)
+
+    net_payable_paise = max(0, subtotal_paise - discount_paise)
+    gst_data = compute_subscription_tax_inclusive(net_payable_paise, recipient_gstin)
+
+    return {
+        "subtotal_paise": subtotal_paise,
+        "discount_paise": discount_paise,
+        "coupon_obj": coupon_obj,
+        "gst_data": gst_data,
+    }
+
+
 @router.post("/checkout/preview", response_model=SubscriptionCheckoutPreviewResponse)
 def preview_subscription_checkout(
     data: SubscriptionCheckoutPreviewRequest,
     db: Session = Depends(get_db)
 ):
     """
-    Pre-checkout inspection showing original amount, discount, tax (18%),
+    Pre-checkout inspection showing original amount, discount, tax-inclusive breakdown,
     final payable amount in integer paise, and billing period before payment creation.
     """
     plan = db.query(SubscriptionPlan).filter(
@@ -160,23 +282,23 @@ def preview_subscription_checkout(
     if not plan:
         raise HTTPException(status_code=404, detail="Subscription plan not found")
 
-    subtotal_paise = plan.price_paise
-    discount_paise = 0
-    coupon_applied = None
+    recipient_gstin = None
+    if data.restaurant_id:
+        rest = db.query(Restaurant).filter(Restaurant.id == data.restaurant_id).first()
+        if rest:
+            recipient_gstin = rest.gst_number
 
-    if data.coupon_code:
-        is_valid, coupon, msg = validate_coupon_logic(db, data.coupon_code, plan.plan_code, data.restaurant_id)
-        if not is_valid:
-            raise HTTPException(status_code=400, detail=msg)
-        coupon_applied = coupon.code
-        if coupon.discount_type == "PERCENTAGE" and coupon.discount_percentage > 0:
-            discount_paise = int(round(subtotal_paise * (coupon.discount_percentage / 100.0)))
-        else:
-            discount_paise = min(subtotal_paise, coupon.discount_paise)
-
-    taxable_paise = max(0, subtotal_paise - discount_paise)
-    tax_paise = int(round(taxable_paise * 0.18))  # 18% GST in integer paise
-    final_amount_paise = taxable_paise + tax_paise
+    pricing = _build_tax_inclusive_checkout_pricing(
+        db=db,
+        plan=plan,
+        coupon_code=data.coupon_code,
+        restaurant_id=data.restaurant_id,
+        recipient_gstin=recipient_gstin,
+    )
+    subtotal_paise = pricing["subtotal_paise"]
+    discount_paise = pricing["discount_paise"]
+    coupon_applied = pricing["coupon_obj"].code if pricing["coupon_obj"] else None
+    gst_data = pricing["gst_data"]
 
     now = datetime.now()
     end_date = now + timedelta(days=plan.duration_days)
@@ -190,13 +312,29 @@ def preview_subscription_checkout(
         subtotal_inr=round(subtotal_paise / 100.0, 2),
         discount_paise=discount_paise,
         discount_inr=round(discount_paise / 100.0, 2),
-        tax_paise=tax_paise,
-        tax_inr=round(tax_paise / 100.0, 2),
-        final_amount_paise=final_amount_paise,
-        final_amount_inr=round(final_amount_paise / 100.0, 2),
+        taxable_paise=gst_data["taxable_paise"],
+        taxable_inr=gst_data["taxable_inr"],
+        tax_percentage=gst_data["tax_rate_total"],
+        tax_paise=gst_data["tax_paise"],
+        tax_inr=gst_data["tax_inr"],
+        final_amount_paise=gst_data["final_amount_paise"],
+        final_amount_inr=gst_data["final_amount_inr"],
+        convenience_fee_paise=0,
+        is_tax_inclusive=True,
+        is_gst_registered=gst_data["is_gst_registered"],
+        document_type=gst_data["document_type"],
         coupon_code=coupon_applied,
         billing_start_date=now.strftime("%d %b %Y"),
-        billing_end_date=end_date.strftime("%d %b %Y")
+        billing_end_date=end_date.strftime("%d %b %Y"),
+        tax_type=gst_data["tax_type"],
+        cgst_paise=gst_data["cgst_paise"],
+        sgst_paise=gst_data["sgst_paise"],
+        igst_paise=gst_data["igst_paise"],
+        cgst_inr=gst_data["cgst_inr"],
+        sgst_inr=gst_data["sgst_inr"],
+        igst_inr=gst_data["igst_inr"],
+        recipient_gstin=gst_data["recipient_gstin"],
+        is_gstin_valid=gst_data["is_gstin_valid"]
     )
 
 @router.post("/checkout", response_model=SubscriptionCheckoutResponse)
@@ -210,7 +348,7 @@ def create_subscription_checkout(
     ]))
 ):
     """
-    Creates an authoritative SaaS subscription invoice and Razorpay order
+    Creates an authoritative SaaS subscription receipt/invoice and Razorpay order
     strictly in integer paise under the Platform merchant account.
     """
     target_rest_id = data.restaurant_id
@@ -231,29 +369,24 @@ def create_subscription_checkout(
     if not plan:
         raise HTTPException(status_code=404, detail=f"Subscription plan '{data.plan_code}' not found")
 
-    # Authoritative calculation strictly in integer paise
-    subtotal_paise = plan.price_paise
-    discount_paise = 0
-    coupon_id = None
+    pricing = _build_tax_inclusive_checkout_pricing(
+        db=db,
+        plan=plan,
+        coupon_code=data.coupon_code,
+        restaurant_id=target_rest_id,
+        recipient_gstin=restaurant.gst_number,
+    )
+    subtotal_paise = pricing["subtotal_paise"]
+    discount_paise = pricing["discount_paise"]
+    coupon_id = pricing["coupon_obj"].id if pricing["coupon_obj"] else None
+    gst_data = pricing["gst_data"]
 
-    if data.coupon_code:
-        is_valid, coupon, msg = validate_coupon_logic(db, data.coupon_code, plan.plan_code, target_rest_id)
-        if not is_valid:
-            raise HTTPException(status_code=400, detail=msg)
-        coupon_id = coupon.id
-        if coupon.discount_type == "PERCENTAGE" and coupon.discount_percentage > 0:
-            discount_paise = int(round(subtotal_paise * (coupon.discount_percentage / 100.0)))
-        else:
-            discount_paise = min(subtotal_paise, coupon.discount_paise)
-
-    taxable_paise = max(0, subtotal_paise - discount_paise)
-    tax_paise = int(round(taxable_paise * 0.18))  # 18% GST
-    final_amount_paise = taxable_paise + tax_paise
-
-    # Generate invoice identifier
-    timestamp_str = datetime.now().strftime("%Y%m")
-    inv_count = db.query(SubscriptionInvoice).count() + 1
-    invoice_number = f"SRMP-INV-{timestamp_str}-{target_rest_id:02d}{inv_count:04d}"
+    # Non-GST PAYMENT_RECEIPT (R{FY}/...) when unregistered; CGST Rule 46(b) TAX_INVOICE (I{FY}/...) when GST active
+    invoice_number = generate_statutory_invoice_number(
+        db,
+        target_rest_id,
+        is_gst_registered=gst_data["is_gst_applicable"],
+    )
 
     invoice = SubscriptionInvoice(
         invoice_number=invoice_number,
@@ -262,13 +395,14 @@ def create_subscription_checkout(
         billing_cycle=plan.billing_cycle,
         subtotal_paise=subtotal_paise,
         discount_paise=discount_paise,
-        tax_percentage=18.0,
-        tax_paise=tax_paise,
-        final_amount_paise=final_amount_paise,
+        tax_percentage=gst_data["tax_rate_total"],
+        tax_paise=gst_data["tax_paise"],
+        final_amount_paise=gst_data["final_amount_paise"],
         currency="INR",
         status="UNPAID",
         coupon_id=coupon_id
     )
+    invoice.recipient_gstin = restaurant.gst_number
     db.add(invoice)
     db.commit()
     db.refresh(invoice)
@@ -287,11 +421,26 @@ def create_subscription_checkout(
         invoice_number=invoice.invoice_number,
         subtotal_paise=invoice.subtotal_paise,
         discount_paise=invoice.discount_paise,
+        taxable_paise=gst_data["taxable_paise"],
+        taxable_inr=gst_data["taxable_inr"],
+        tax_percentage=gst_data["tax_rate_total"],
         tax_paise=invoice.tax_paise,
         subtotal_inr=invoice.subtotal_inr,
         discount_inr=invoice.discount_inr,
         tax_inr=invoice.tax_inr,
-        final_amount=invoice.final_amount_inr
+        final_amount=invoice.final_amount_inr,
+        convenience_fee_paise=0,
+        is_tax_inclusive=True,
+        is_gst_registered=gst_data["is_gst_registered"],
+        document_type=gst_data["document_type"],
+        tax_type=gst_data["tax_type"],
+        cgst_paise=gst_data["cgst_paise"],
+        sgst_paise=gst_data["sgst_paise"],
+        igst_paise=gst_data["igst_paise"],
+        cgst_inr=gst_data["cgst_inr"],
+        sgst_inr=gst_data["sgst_inr"],
+        igst_inr=gst_data["igst_inr"],
+        recipient_gstin=gst_data["recipient_gstin"]
     )
 
 @router.post("/verify")
@@ -355,14 +504,14 @@ def verify_subscription_payment(
     db.add(payment)
 
     # Compute renewal and expiration: extend from existing expiry if currently active, else from now
-    now = datetime.now()
+    now = _now_for(restaurant.subscription_expires_at)
     base_date = now
     if restaurant.subscription_expires_at and restaurant.subscription_expires_at > now:
         base_date = restaurant.subscription_expires_at
 
     duration_days = plan.duration_days or 30
     invoice.status = "PAID"
-    invoice.paid_at = now
+    invoice.paid_at = datetime.now(timezone.utc)
     invoice.billing_start_date = base_date
     invoice.billing_end_date = base_date + timedelta(days=duration_days)
 
@@ -442,7 +591,7 @@ async def platform_subscription_webhook(request: Request, db: Session = Depends(
         invoice = db.query(SubscriptionInvoice).filter(SubscriptionInvoice.id == invoice_id).first()
         if invoice and invoice.status != "PAID":
             invoice.status = "PAID"
-            invoice.paid_at = datetime.now()
+            invoice.paid_at = datetime.now(timezone.utc)
             restaurant = db.query(Restaurant).filter(Restaurant.id == invoice.restaurant_id).first()
             if restaurant:
                 restaurant.subscription_status = "ACTIVE"
@@ -503,7 +652,7 @@ def get_my_subscription_status(
         raise HTTPException(status_code=404, detail="Restaurant not found")
 
     live_status = restaurant.evaluate_subscription_status()
-    now = datetime.now()
+    now = _now_for(restaurant.subscription_expires_at)
 
     days_remaining = 0
     is_in_grace_period = (live_status == "PAST_DUE")
@@ -574,16 +723,31 @@ def get_subscription_invoices(
             subtotal_inr=inv.subtotal_inr,
             discount_paise=inv.discount_paise,
             discount_inr=inv.discount_inr,
+            taxable_paise=inv.taxable_paise,
+            taxable_inr=inv.taxable_inr,
+            tax_percentage=inv.tax_percentage or 0.0,
             tax_paise=inv.tax_paise,
             tax_inr=inv.tax_inr,
             final_amount_paise=inv.final_amount_paise,
             final_amount_inr=inv.final_amount_inr,
             currency=inv.currency,
             status=inv.status,
+            is_tax_inclusive=True,
+            is_gst_registered=inv.is_gst_registered,
+            document_type=inv.document_type,
             billing_start_date=inv.billing_start_date,
             billing_end_date=inv.billing_end_date,
             paid_at=inv.paid_at,
             created_at=inv.created_at,
+            tax_type=inv.tax_type,
+            cgst_paise=inv.cgst_paise,
+            sgst_paise=inv.sgst_paise,
+            igst_paise=inv.igst_paise,
+            cgst_inr=inv.cgst_inr,
+            sgst_inr=inv.sgst_inr,
+            igst_inr=inv.igst_inr,
+            recipient_gstin=inv.recipient_gstin,
+            supplier_gstin=inv.supplier_gstin,
             payments=payments_data
         ))
     return results
@@ -626,16 +790,19 @@ def get_platform_subscription_analytics(
     churn_count = 0
 
     mrr_paise = 0
+    plans_by_code = {p.plan_code: p.price_paise for p in db.query(SubscriptionPlan).all()}
+    monthly_price = plans_by_code.get("MONTHLY", 99900)
+    yearly_price = plans_by_code.get("YEARLY", 999900)
 
     for r in restaurants:
         status = r.evaluate_subscription_status()
         if status == "ACTIVE":
             active_tenants += 1
-            # Add to MRR based on active plan
+            # Add to MRR based on active tax-inclusive plan price
             if r.subscription_plan == "MONTHLY":
-                mrr_paise += 199900
+                mrr_paise += monthly_price
             elif r.subscription_plan == "YEARLY":
-                mrr_paise += int(round(1199900 / 12.0))
+                mrr_paise += int(round(yearly_price / 12.0))
         elif status == "TRIAL":
             trial_tenants += 1
         elif status == "PAST_DUE":
@@ -679,7 +846,6 @@ def evaluate_expiries_job(
     """
     restaurants = db.query(Restaurant).all()
     updated_count = 0
-    now = datetime.now()
 
     for r in restaurants:
         old_status = r.subscription_status
@@ -800,6 +966,11 @@ def create_subscription_coupon(
 ):
     """Allows Super Admin to create a new promo discount coupon."""
     clean_code = data.code.strip().upper()
+    if clean_code in DEPRECATED_PRICING_COUPONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Coupon code '{clean_code}' is permanently retired under tax-inclusive direct pricing (₹999/mo, ₹9,999/yr)."
+        )
     existing = db.query(SubscriptionCoupon).filter(SubscriptionCoupon.code == clean_code).first()
     if existing:
         raise HTTPException(status_code=400, detail=f"Coupon code '{clean_code}' already exists")
@@ -810,7 +981,7 @@ def create_subscription_coupon(
         discount_type=data.discount_type,
         discount_percentage=data.discount_percentage,
         eligible_plan_codes=data.eligible_plan_codes.upper(),
-        start_date=data.start_date or datetime.now(),
+        start_date=data.start_date or datetime.now(timezone.utc),
         end_date=data.end_date,
         max_uses_global=data.max_uses_global,
         max_uses_per_restaurant=data.max_uses_per_restaurant,
@@ -849,6 +1020,11 @@ def toggle_coupon_status(
     coupon = db.query(SubscriptionCoupon).filter(SubscriptionCoupon.id == coupon_id).first()
     if not coupon:
         raise HTTPException(status_code=404, detail="Coupon not found")
+    if is_active and coupon.code in DEPRECATED_PRICING_COUPONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Coupon code '{coupon.code}' is permanently retired under tax-inclusive direct pricing and cannot be re-enabled."
+        )
     coupon.is_active = is_active
     db.commit()
     return {"success": True, "coupon_id": coupon.id, "code": coupon.code, "is_active": coupon.is_active}
@@ -873,7 +1049,7 @@ def refund_subscription(
     payment.status = "REFUNDED"
     payment.refund_id = refund_res["refund_id"]
     payment.refund_amount_paise = int(round(refund_res["refund_amount"] * 100))
-    payment.refunded_at = datetime.now()
+    payment.refunded_at = datetime.now(timezone.utc)
 
     invoice = db.query(SubscriptionInvoice).filter(SubscriptionInvoice.id == payment.invoice_id).first()
     if invoice:

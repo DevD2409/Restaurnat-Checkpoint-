@@ -1,3 +1,5 @@
+import { getWsBaseUrl } from '../config/runtime';
+
 type WebSocketCallback = (event: { type: string; data: any }) => void;
 
 class WebSocketClient {
@@ -8,10 +10,14 @@ class WebSocketClient {
   private isConnecting: boolean = false;
 
   connect(channelOrPath: string) {
-    const wsBase = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
+    const wsBase = getWsBaseUrl();
+    if (!wsBase) {
+      return;
+    }
+    const normalizedPath = channelOrPath.replace(/^\/+/, '');
     const token = localStorage.getItem('token');
     const tokenQuery = token ? `?token=${encodeURIComponent(token)}` : '';
-    this.url = `${wsBase}/${channelOrPath}${tokenQuery}`;
+    this.url = `${wsBase}/${normalizedPath}${tokenQuery}`;
 
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;

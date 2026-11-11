@@ -13,6 +13,7 @@ from app.models.user import User, UserRole
 from app.models.feedback import Feedback, FeedbackDishRating, FeedbackPhoto
 from app.models.restaurant import Restaurant
 from app.models.order import Order, OrderStatus, PaymentStatus
+from app.services.storage_service import storage_service
 from app.schemas.feedback import (
     FeedbackCreate, FeedbackResponse, DishRatingResponse, PhotoResponse,
     FeedbackModerateRequest, FeedbackReportRequest, FeedbackAnalyticsResponse,
@@ -253,67 +254,15 @@ def submit_feedback(data: FeedbackCreate, db: Session = Depends(get_db)):
 
     return format_feedback_response(feedback, restaurant.google_review_url)
 
-# 2. Upload Review Photo Endpoint with strict file validation
+# 2. Upload Review Photo Endpoint with strict file validation & persistent storage
 @router.post("/upload-photo")
 async def upload_review_photo(file: UploadFile = File(...)):
     """
     Secure customer photo upload for reviews.
     Validates MIME type, file extension, magic bytes, and enforces 5MB size limit.
+    Stores photo either on persistent cloud object storage (S3/Cloudflare R2) or local storage.
     """
-    MAX_SIZE = 5 * 1024 * 1024  # 5 MB
-    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-    ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
-
-    # Validate file extension
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file extension '{ext}'. Only JPEG, PNG, and WebP images are allowed."
-        )
-
-    # Validate content-type header
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid MIME type '{file.content_type}'. Must be image/jpeg, image/png, or image/webp."
-        )
-
-    # Read contents and enforce size limit
-    content = await file.read()
-    if len(content) > MAX_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File size exceeds maximum allowed limit of 5MB."
-        )
-
-    # Magic Bytes Validation
-    is_valid_magic = False
-    if ext in [".jpg", ".jpeg"] and content.startswith(b"\xff\xd8\xff"):
-        is_valid_magic = True
-    elif ext == ".png" and content.startswith(b"\x89PNG\r\n\x1a\n"):
-        is_valid_magic = True
-    elif ext == ".webp" and content.startswith(b"RIFF") and b"WEBP" in content[8:12]:
-        is_valid_magic = True
-
-    if not is_valid_magic:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Corrupted or invalid image header. File signature does not match image format."
-        )
-
-    # Save to safe uploads directory
-    safe_filename = f"review_{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
-    with open(file_path, "wb") as f:
-        f.write(content)
-
-    photo_url = f"/static/uploads/feedback/{safe_filename}"
-    return {
-        "photo_url": photo_url,
-        "file_size_bytes": len(content),
-        "mime_type": file.content_type
-    }
+    return await storage_service.save_image(file, folder="feedback", prefix="review")
 
 # 3. Public Reviews for a Given Restaurant
 @router.get("/restaurant/{restaurant_id}", response_model=List[FeedbackResponse])

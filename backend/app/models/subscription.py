@@ -1,4 +1,5 @@
 import json
+from typing import Optional, Dict, Any
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -11,7 +12,7 @@ class SubscriptionPlan(Base):
     plan_code = Column(String(50), unique=True, index=True, nullable=False)  # MONTHLY, YEARLY
     name = Column(String(100), nullable=False)
     billing_cycle = Column(String(20), default="MONTHLY")  # MONTHLY, YEARLY
-    price_paise = Column(Integer, nullable=False)  # Stored in integer paise (e.g. 199900 = ₹1,999)
+    price_paise = Column(Integer, nullable=False)  # Stored in integer paise (e.g. 99900 = ₹999, 999900 = ₹9,999)
     currency = Column(String(10), default="INR")
     duration_days = Column(Integer, default=30)  # 30 for monthly, 365 for yearly
     features = Column(Text, nullable=True)  # Comma-separated or description
@@ -78,15 +79,15 @@ class SubscriptionInvoice(Base):
     __tablename__ = "subscription_invoices"
 
     id = Column(Integer, primary_key=True, index=True)
-    invoice_number = Column(String(50), unique=True, index=True, nullable=False)  # SRMP-INV-YYYYMM-XXXX
+    invoice_number = Column(String(50), unique=True, index=True, nullable=False)  # R2627/001-00001 or I2627/001-00001
     restaurant_id = Column(Integer, ForeignKey("restaurants.id"), nullable=False, index=True)
     plan_id = Column(Integer, ForeignKey("subscription_plans.id"), nullable=False, index=True)
     billing_cycle = Column(String(20), default="MONTHLY")
     
-    # Financial values in integer paise
+    # Financial values in integer paise (tax-inclusive final amounts)
     subtotal_paise = Column(Integer, nullable=False)
     discount_paise = Column(Integer, default=0)
-    tax_percentage = Column(Float, default=18.0)  # 18% GST for SaaS platform services
+    tax_percentage = Column(Float, default=0.0)  # 0.0 when unregistered; 18.0 when GST-registered & CA confirmed
     tax_paise = Column(Integer, default=0)
     final_amount_paise = Column(Integer, nullable=False)
     
@@ -115,8 +116,91 @@ class SubscriptionInvoice(Base):
         return round(self.tax_paise / 100.0, 2)
 
     @property
+    def taxable_paise(self) -> int:
+        return max(0, (self.final_amount_paise or 0) - (self.tax_paise or 0))
+
+    @property
+    def taxable_inr(self) -> float:
+        return round(self.taxable_paise / 100.0, 2)
+
+    @property
+    def is_gst_registered(self) -> bool:
+        return bool((self.tax_paise or 0) > 0)
+
+    @property
+    def document_type(self) -> str:
+        return "TAX_INVOICE" if self.is_gst_registered else "PAYMENT_RECEIPT"
+
+    @property
     def final_amount_inr(self) -> float:
         return round(self.final_amount_paise / 100.0, 2)
+
+    @property
+    def recipient_gstin(self) -> Optional[str]:
+        if hasattr(self, '_recipient_gstin') and self._recipient_gstin is not None:
+            return self._recipient_gstin
+        try:
+            from app.core.database import SessionLocal
+            from app.models.restaurant import Restaurant
+            db = SessionLocal()
+            r = db.query(Restaurant).filter(Restaurant.id == self.restaurant_id).first()
+            val = r.gst_number if r else None
+            db.close()
+            return val
+        except Exception:
+            return None
+
+    @recipient_gstin.setter
+    def recipient_gstin(self, val: Optional[str]):
+        self._recipient_gstin = val
+
+    @property
+    def supplier_gstin(self) -> Optional[str]:
+        if not self.is_gst_registered:
+            return None
+        from app.services.gst_service import is_platform_gst_active
+        is_active, clean_sup, _ = is_platform_gst_active()
+        return clean_sup if is_active else None
+
+    @property
+    def gst_breakdown(self) -> dict:
+        from app.services.gst_service import compute_subscription_tax_inclusive
+        # Respect the historical tax status stored on this invoice row
+        is_gst_inv = bool((self.tax_paise or 0) > 0)
+        return compute_subscription_tax_inclusive(
+            final_amount_paise=self.final_amount_paise or 0,
+            recipient_gstin=self.recipient_gstin,
+            is_gst_registered=is_gst_inv,
+            is_gst_rate_ca_confirmed=is_gst_inv,
+        )
+
+    @property
+    def tax_type(self) -> str:
+        return self.gst_breakdown.get("tax_type", "UNREGISTERED_NO_GST")
+
+    @property
+    def cgst_paise(self) -> int:
+        return self.gst_breakdown.get("cgst_paise", 0)
+
+    @property
+    def sgst_paise(self) -> int:
+        return self.gst_breakdown.get("sgst_paise", 0)
+
+    @property
+    def igst_paise(self) -> int:
+        return self.gst_breakdown.get("igst_paise", 0)
+
+    @property
+    def cgst_inr(self) -> float:
+        return self.gst_breakdown.get("cgst_inr", 0.0)
+
+    @property
+    def sgst_inr(self) -> float:
+        return self.gst_breakdown.get("sgst_inr", 0.0)
+
+    @property
+    def igst_inr(self) -> float:
+        return self.gst_breakdown.get("igst_inr", 0.0)
 
 class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"

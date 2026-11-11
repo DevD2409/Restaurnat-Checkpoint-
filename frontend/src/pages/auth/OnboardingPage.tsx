@@ -4,7 +4,7 @@ import {
   Sparkles, Utensils, QrCode, Lock, Mail, Phone, MapPin, 
   Check, AlertCircle, Loader2, DollarSign, Store
 } from 'lucide-react';
-import axios from 'axios';
+import { apiClient } from '../../services/api';
 import { useNavigate } from 'react-router-dom';
 
 export function OnboardingPage() {
@@ -46,7 +46,7 @@ export function OnboardingPage() {
     }
     try {
       setSlugChecking(true);
-      const res = await axios.get(`/api/v1/onboarding/check-slug?slug=${encodeURIComponent(slugToTest)}`);
+      const res = await apiClient.get(`/onboarding/check-slug?slug=${encodeURIComponent(slugToTest)}`);
       setSlugAvailable(res.data.available);
     } catch (e) {
       console.error('Slug check failed:', e);
@@ -78,7 +78,7 @@ export function OnboardingPage() {
     setSubmitting(true);
 
     try {
-      const res = await axios.post('/api/v1/onboarding/register', formData);
+      const res = await apiClient.post('/onboarding/register', formData);
       setOnboardedResult(res.data);
       setStep(4); // Success step
     } catch (err: any) {

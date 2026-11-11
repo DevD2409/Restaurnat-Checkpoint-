@@ -43,7 +43,7 @@ def auth_tokens():
         "superadmin": superadmin_token
     }
 
-# 1. Test Integer Paise Plans: Monthly ₹1,999 (199900 paise) & Yearly ₹11,999 (1199900 paise)
+# 1. Test Tax-Inclusive Integer Paise Plans: Monthly ₹999 (99900 paise) & Yearly ₹9,999 (999900 paise)
 def test_subscription_plans_integer_paise():
     res = client.get("/api/v1/subscriptions/plans")
     assert res.status_code == 200
@@ -53,52 +53,76 @@ def test_subscription_plans_integer_paise():
     monthly = next(p for p in plans if p["plan_code"] == "MONTHLY")
     yearly = next(p for p in plans if p["plan_code"] == "YEARLY")
 
-    # Verify integer paise
+    # Verify authoritative integer paise
     assert isinstance(monthly["price_paise"], int)
-    assert monthly["price_paise"] == 199900
-    assert monthly["price_inr"] == 1999.0
+    assert monthly["price_paise"] == 99900
+    assert monthly["price_inr"] == 999.0
     assert monthly["duration_days"] == 30
 
     assert isinstance(yearly["price_paise"], int)
-    assert yearly["price_paise"] == 1199900
-    assert yearly["price_inr"] == 11999.0
+    assert yearly["price_paise"] == 999900
+    assert yearly["price_inr"] == 9999.0
     assert yearly["duration_days"] == 365
 
     # Check entitlements
     assert "kds_access" in monthly["entitlements"]
     assert yearly["entitlements"]["multi_branch"] is True
 
-# 2. Test Coupon Validation: Monthly coupon reduces ₹1,999 to ₹999 & Yearly reduces ₹11,999 to ₹9,999
+# 2. Test Retired Legacy Coupons Blocked & Promotional Vouchers Validated on Direct Pricing
 def test_coupon_validation_monthly_and_yearly_discounts():
-    # Monthly: ₹1,999 - ₹1,000 = ₹999
-    res_m = client.post("/api/v1/subscriptions/coupons/validate", json={
+    # Legacy pricing coupons MONTHLY999 / YEARLY9999 are permanently retired
+    res_ret_m = client.post("/api/v1/subscriptions/coupons/validate", json={
         "code": "MONTHLY999",
+        "plan_code": "MONTHLY"
+    })
+    assert res_ret_m.status_code == 200
+    assert res_ret_m.json()["is_valid"] is False
+
+    res_ret_y = client.post("/api/v1/subscriptions/coupons/validate", json={
+        "code": "YEARLY9999",
+        "plan_code": "YEARLY"
+    })
+    assert res_ret_y.status_code == 200
+    assert res_ret_y.json()["is_valid"] is False
+
+    # Active promotional coupon LAUNCH50 (50% off) applies cleanly on tax-inclusive base
+    res_m = client.post("/api/v1/subscriptions/coupons/validate", json={
+        "code": "LAUNCH50",
         "plan_code": "MONTHLY"
     })
     assert res_m.status_code == 200
     data_m = res_m.json()
     assert data_m["is_valid"] is True
-    assert data_m["discount_paise"] == 100000  # ₹1,000 off
-    assert data_m["final_amount_paise"] == 99900  # ₹999 payable
-    assert data_m["final_amount_inr"] == 999.0
-
-    # Yearly: ₹11,999 - ₹2,000 = ₹9,999
-    res_y = client.post("/api/v1/subscriptions/coupons/validate", json={
-        "code": "YEARLY9999",
-        "plan_code": "YEARLY"
-    })
-    assert res_y.status_code == 200
-    data_y = res_y.json()
-    assert data_y["is_valid"] is True
-    assert data_y["discount_paise"] == 200000  # ₹2,000 off
-    assert data_y["final_amount_paise"] == 999900  # ₹9,999 payable
-    assert data_y["final_amount_inr"] == 9999.0
+    assert data_m["discount_paise"] == 49950
+    assert data_m["final_amount_paise"] == 49950
+    assert data_m["final_amount_inr"] == 499.5
 
 # 3. Test Coupon Plan Mismatch Rejection
 def test_coupon_plan_mismatch_rejection():
-    # Attempting to use Yearly coupon on Monthly plan
+    db = SessionLocal()
+    db.query(SubscriptionCoupon).filter(
+        SubscriptionCoupon.code.in_(["ONLYMONTHLY_TST", "ONLYYEARLY_TST"])
+    ).delete(synchronize_session=False)
+    db.add(SubscriptionCoupon(
+        code="ONLYMONTHLY_TST",
+        discount_paise=10000,
+        discount_type="FIXED_AMOUNT",
+        eligible_plan_codes="MONTHLY",
+        is_active=True
+    ))
+    db.add(SubscriptionCoupon(
+        code="ONLYYEARLY_TST",
+        discount_paise=50000,
+        discount_type="FIXED_AMOUNT",
+        eligible_plan_codes="YEARLY",
+        is_active=True
+    ))
+    db.commit()
+    db.close()
+
+    # Attempting to use Yearly-only coupon on Monthly plan
     res = client.post("/api/v1/subscriptions/coupons/validate", json={
-        "code": "YEARLY9999",
+        "code": "ONLYYEARLY_TST",
         "plan_code": "MONTHLY"
     })
     assert res.status_code == 200
@@ -106,9 +130,9 @@ def test_coupon_plan_mismatch_rejection():
     assert data["is_valid"] is False
     assert "not eligible for the MONTHLY plan" in data["message"]
 
-    # Attempting to use Monthly coupon on Yearly plan
+    # Attempting to use Monthly-only coupon on Yearly plan
     res2 = client.post("/api/v1/subscriptions/coupons/validate", json={
-        "code": "MONTHLY999",
+        "code": "ONLYMONTHLY_TST",
         "plan_code": "YEARLY"
     })
     assert res2.status_code == 200
@@ -163,20 +187,21 @@ def test_coupon_expiry_and_inactive_rejection(auth_tokens):
     assert res_inact.json()["is_valid"] is False
     assert "inactive" in res_inact.json()["message"]
 
-# 5. Test Pre-Checkout Preview with 18% GST and Billing Dates
+# 5. Test Pre-Checkout Preview with Tax-Inclusive Pricing & Non-GST Receipt Defaults
 def test_checkout_preview_inspection():
     res = client.post("/api/v1/subscriptions/checkout/preview", json={
-        "plan_code": "MONTHLY",
-        "coupon_code": "MONTHLY999"
+        "plan_code": "MONTHLY"
     })
     assert res.status_code == 200
     data = res.json()
-    assert data["subtotal_paise"] == 199900
-    assert data["discount_paise"] == 100000
-    # Taxable: 99900 paise. 18% GST = 17982 paise (₹179.82). Final = 99900 + 17982 = 117882 paise (₹1,178.82)
-    assert data["tax_paise"] == 17982
-    assert data["final_amount_paise"] == 117882
-    assert data["final_amount_inr"] == 1178.82
+    assert data["subtotal_paise"] == 99900
+    assert data["discount_paise"] == 0
+    assert data["tax_paise"] == 0
+    assert data["final_amount_paise"] == 99900
+    assert data["final_amount_inr"] == 999.0
+    assert data["is_tax_inclusive"] is True
+    assert data["convenience_fee_paise"] == 0
+    assert data["document_type"] == "PAYMENT_RECEIPT"
     assert "billing_start_date" in data
     assert "billing_end_date" in data
 
