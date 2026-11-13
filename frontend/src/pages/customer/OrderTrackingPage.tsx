@@ -6,8 +6,9 @@ import {
   CheckCircle, Star, Camera, X, ExternalLink, ThumbsUp,
   MessageSquare, ShieldCheck, RefreshCw, Upload
 } from 'lucide-react';
-import { orderApi, feedbackApi, restaurantApi } from '../../services/api';
+import { orderApi, feedbackApi, restaurantApi, tableApi } from '../../services/api';
 import { useWebSocket } from '../../context/WebSocketContext';
+import { useCart } from '../../context/CartContext';
 import { Order, OrderStatus } from '../../types';
 import { resolveMediaUrl } from '../../config/runtime';
 
@@ -35,7 +36,9 @@ export const OrderTrackingPage: React.FC = () => {
   const [uploadedPhotos, setUploadedPhotos] = useState<string[]>([]);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  const { lastEvent, connectChannel } = useWebSocket();
+  const { lastEvent, connectChannel, connectionStatus } = useWebSocket();
+  const { sessionToken, setTableSession, clearTableSession } = useCart();
+  const [refreshingSession, setRefreshingSession] = useState(false);
   const basePath = qrToken ? `/table/${qrToken}` : '/menu';
 
   const orderStages: { status: OrderStatus; label: string; desc: string; icon: React.FC<{ className?: string }> }[] = [
@@ -47,13 +50,44 @@ export const OrderTrackingPage: React.FC = () => {
     { status: 'COMPLETED', label: 'Completed', desc: 'Dining experience concluded', icon: CheckCircle2 },
   ];
 
+  const handleRefreshSession = async () => {
+    if (!qrToken) return;
+    setRefreshingSession(true);
+    try {
+      const res = await tableApi.validateQR(qrToken);
+      if (res.valid && res.table_id && res.table_number && res.session_token) {
+        setTableSession(res.table_id, res.table_number, res.restaurant_id || 1, res.session_token);
+        connectChannel(`table/${res.table_id}`, {
+          restaurantId: res.restaurant_id || 1,
+          sessionToken: res.session_token,
+        });
+      }
+    } catch {
+      // Session still expired or invalid
+    } finally {
+      setRefreshingSession(false);
+    }
+  };
+
   const fetchOrder = async () => {
     if (!orderId) return;
     try {
       const data = await orderApi.getById(parseInt(orderId, 10));
       setOrder(data);
+      if (data.status === 'COMPLETED') {
+        clearTableSession();
+      }
       if (data.table_id) {
-        connectChannel(`table/${data.table_id}`);
+        const effectiveSessionToken =
+          sessionToken ||
+          (typeof sessionStorage !== 'undefined'
+            ? sessionStorage.getItem('smart_restaurant_session_token')
+            : null);
+
+        connectChannel(`table/${data.table_id}`, {
+          restaurantId: data.restaurant_id,
+          sessionToken: effectiveSessionToken,
+        });
       }
 
       // Initialize dish ratings
@@ -72,7 +106,7 @@ export const OrderTrackingPage: React.FC = () => {
           if (restProfile?.google_review_url) {
             setGoogleReviewUrl(restProfile.google_review_url);
           }
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
@@ -86,6 +120,12 @@ export const OrderTrackingPage: React.FC = () => {
   useEffect(() => {
     fetchOrder();
   }, [orderId]);
+
+  useEffect(() => {
+    if (connectionStatus === 'UNAUTHORIZED') {
+      clearTableSession();
+    }
+  }, [connectionStatus]);
 
   // Handle incoming real-time WebSocket events
   useEffect(() => {
@@ -205,6 +245,25 @@ export const OrderTrackingPage: React.FC = () => {
         <ArrowLeft className="w-4 h-4" />
         <span>Back to Menu</span>
       </Link>
+
+      {connectionStatus === 'UNAUTHORIZED' && (
+        <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between text-xs text-amber-200">
+          <div className="flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Table session has expired or is unauthorized. Real-time status updates are paused.</span>
+          </div>
+          {qrToken && (
+            <button
+              onClick={handleRefreshSession}
+              disabled={refreshingSession}
+              className="ml-3 px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[11px] font-bold border border-amber-500/40 transition flex items-center space-x-1"
+            >
+              <RefreshCw className={`w-3 h-3 ${refreshingSession ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main Status Header Card */}
       <div className="bg-gradient-to-br from-[#181924] to-[#12131a] border border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-2xl relative overflow-hidden">

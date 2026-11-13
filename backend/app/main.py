@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import uuid
@@ -11,8 +12,14 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import Base, engine, SessionLocal
-from app.core.security import decode_access_token
+from app.core.dependencies import (
+    authenticate_websocket_user,
+    is_staff_user,
+    verify_table_session_token,
+)
+from app.models.restaurant import Restaurant
 from app.models.table import Table
+from app.models.user import User, UserRole
 from app.utils.seed_data import seed_database, ensure_subscription_plans_synced
 from app.websocket.connection_manager import manager
 
@@ -22,6 +29,35 @@ logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+
+import re
+
+REDACT_QUERY_PARAMS_REGEX = re.compile(
+    r"([?&](?:token|session_token)=)[^&\s'\"]+",
+    re.IGNORECASE
+)
+
+class RedactSensitiveQueryFilter(logging.Filter):
+    """Redacts sensitive query parameters like token and session_token from all log output."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = REDACT_QUERY_PARAMS_REGEX.sub(r"\1[REDACTED]", record.msg)
+        if record.args:
+            if isinstance(record.args, tuple):
+                record.args = tuple(
+                    REDACT_QUERY_PARAMS_REGEX.sub(r"\1[REDACTED]", str(arg)) if isinstance(arg, str) else arg
+                    for arg in record.args
+                )
+            elif isinstance(record.args, dict):
+                record.args = {
+                    k: REDACT_QUERY_PARAMS_REGEX.sub(r"\1[REDACTED]", str(v)) if isinstance(v, str) else v
+                    for k, v in record.args.items()
+                }
+        return True
+
+_redact_filter = RedactSensitiveQueryFilter()
+for _log_name in ("", "uvicorn", "uvicorn.access", "uvicorn.error", "srmp", "websocket", "fastapi"):
+    logging.getLogger(_log_name).addFilter(_redact_filter)
 
 # Optional Sentry error reporting integration
 if settings.SENTRY_DSN:
@@ -214,6 +250,120 @@ PRIVILEGED_CHANNELS = {
     "staff": ["PLATFORM_SUPER_ADMIN", "RESTAURANT_OWNER", "ADMIN", "RESTAURANT_MANAGER", "MANAGER", "WAITER", "CASHIER"]
 }
 
+def _authenticate_ws_token(token: Optional[str]) -> Optional[User]:
+    """Resolve active non-locked user for WebSocket auth using a short-lived DB session."""
+    if not token:
+        return None
+    db = None
+    try:
+        db = SessionLocal()
+        return authenticate_websocket_user(token, db)
+    except Exception as e:
+        logger.warning(f"WebSocket token authentication failed: {e}")
+        return None
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _is_active_restaurant(restaurant_id: Optional[int]) -> bool:
+    """Verify the target restaurant exists and is active without ever defaulting to tenant 1."""
+    if restaurant_id is None or restaurant_id <= 0:
+        return False
+    db = None
+    try:
+        db = SessionLocal()
+        return (
+            db.query(Restaurant.id)
+            .filter(Restaurant.id == restaurant_id, Restaurant.is_active == True)
+            .first()
+            is not None
+        )
+    except Exception as e:
+        logger.warning(f"WebSocket restaurant verification failed for restaurant_id={restaurant_id}: {e}")
+        return False
+    finally:
+        if db is not None:
+            db.close()
+
+
+def _resolve_table_ws_tenant(
+    websocket: WebSocket,
+    *,
+    table_id: int,
+    expected_tenant_id: Optional[int] = None,
+    token: Optional[str] = None,
+    session_token: Optional[str] = None,
+) -> Optional[int]:
+    """
+    Validate table ownership, tenant match, and caller credentials (staff JWT or active TableSession)
+    for table WebSocket connections. Never falls back to tenant 1 on missing table or DB failure.
+    """
+    raw_session = (
+        session_token
+        if session_token is not None
+        else websocket.headers.get("x-table-session")
+    )
+
+    db = None
+    try:
+        db = SessionLocal()
+        user: Optional[User] = None
+        if token is not None:
+            user = authenticate_websocket_user(token, db)
+            if not user:
+                return None
+
+        table = (
+            db.query(Table)
+            .join(Restaurant, Table.restaurant_id == Restaurant.id)
+            .filter(
+                Table.id == table_id,
+                Table.is_active == True,
+                Restaurant.is_active == True,
+            )
+            .first()
+        )
+        if not table or not table.restaurant_id:
+            return None
+
+        if expected_tenant_id is not None and table.restaurant_id != expected_tenant_id:
+            return None
+
+        if user is not None and is_staff_user(user):
+            if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id != table.restaurant_id:
+                return None
+            if raw_session is not None:
+                if not verify_table_session_token(db, raw_session, expected_table_id=table.id):
+                    return None
+            return table.restaurant_id
+
+        # Non-staff / customer callers must present an active, non-ended TableSession for this exact table
+        if raw_session is None:
+            return None
+        active_session = verify_table_session_token(db, raw_session, expected_table_id=table.id)
+        if not active_session:
+            return None
+        return table.restaurant_id
+    except Exception as e:
+        logger.warning(f"Table WebSocket authorization lookup failed for table_id={table_id}: {e}")
+        return None
+    finally:
+        if db is not None:
+            db.close()
+
+
+async def _run_ws_heartbeat(websocket: WebSocket, pong_payload: dict, disconnect_fn) -> None:
+    try:
+        while True:
+            await websocket.receive_text()
+            await websocket.send_text(json.dumps(pong_payload))
+    except WebSocketDisconnect:
+        disconnect_fn()
+    except Exception:
+        disconnect_fn()
+
+
 @app.websocket("/ws/tenant/{tenant_id}/{channel}")
 async def websocket_tenant_channel_endpoint(
     websocket: WebSocket,
@@ -221,99 +371,156 @@ async def websocket_tenant_channel_endpoint(
     channel: str,
     token: Optional[str] = Query(None)
 ):
-    """Multi-tenant isolated WebSocket channel with cryptographic membership enforcement."""
-    if channel in PRIVILEGED_CHANNELS:
-        allowed_roles = PRIVILEGED_CHANNELS[channel]
-        if not token:
+    """Multi-tenant isolated WebSocket channel with active-user & password-rotation enforcement."""
+    norm_channel = (channel or "").strip().lower()
+    if not norm_channel or not _is_active_restaurant(tenant_id):
+        await websocket.close(code=1008)
+        return
+
+    if norm_channel in PRIVILEGED_CHANNELS:
+        allowed_roles = PRIVILEGED_CHANNELS[norm_channel]
+        user = _authenticate_ws_token(token)
+        if not user or user.role.value not in allowed_roles:
             await websocket.close(code=1008)
             return
-        payload = decode_access_token(token)
-        if not payload:
-            await websocket.close(code=1008)
-            return
-        user_role = payload.get("role")
-        user_tenant = payload.get("restaurant_id")
-        
-        # Verify role and strict tenant isolation (Platform super admins can subscribe anywhere)
-        if user_role not in allowed_roles:
-            await websocket.close(code=1008)
-            return
-        if user_role != "PLATFORM_SUPER_ADMIN" and user_tenant != tenant_id:
+        if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id != tenant_id:
             await websocket.close(code=1008)  # Reject cross-tenant eavesdropping
             return
+    elif token is not None:
+        user = _authenticate_ws_token(token)
+        if not user:
+            await websocket.close(code=1008)
+            return
+        if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id != tenant_id:
+            await websocket.close(code=1008)
+            return
 
-    await manager.connect(websocket, channel=channel, restaurant_id=tenant_id)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f'{{"type": "PONG", "tenant_id": {tenant_id}, "channel": "{channel}"}}')
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, channel=channel, restaurant_id=tenant_id)
-    except Exception:
-        manager.disconnect(websocket, channel=channel, restaurant_id=tenant_id)
+    await manager.connect(websocket, channel=norm_channel, restaurant_id=tenant_id)
+    await _run_ws_heartbeat(
+        websocket,
+        {"type": "PONG", "tenant_id": tenant_id, "channel": norm_channel},
+        lambda: manager.disconnect(websocket, channel=norm_channel, restaurant_id=tenant_id),
+    )
+
 
 @app.websocket("/ws/{channel}")
 async def websocket_channel_endpoint(
     websocket: WebSocket,
     channel: str,
-    token: Optional[str] = Query(None)
+    token: Optional[str] = Query(None),
+    restaurant_id: Optional[int] = Query(None),
 ):
-    """Backward-compatible global channel endpoint."""
-    if channel in PRIVILEGED_CHANNELS:
-        allowed_roles = PRIVILEGED_CHANNELS[channel]
-        if token:
-            payload = decode_access_token(token)
-            if not payload or payload.get("role") not in allowed_roles:
-                await websocket.close(code=1008)
-                return
-        elif settings.ENVIRONMENT == "production":
+    """
+    Tenant-scoped WebSocket channel endpoint.
+    Privileged channels always require valid authentication in every environment and never default
+    a super-admin or anonymous connection to tenant 1.
+    """
+    norm_channel = (channel or "").strip().lower()
+    if not norm_channel:
+        await websocket.close(code=1008)
+        return
+
+    resolved_restaurant_id: Optional[int] = None
+    if norm_channel in PRIVILEGED_CHANNELS:
+        allowed_roles = PRIVILEGED_CHANNELS[norm_channel]
+        user = _authenticate_ws_token(token)
+        if not user or user.role.value not in allowed_roles:
             await websocket.close(code=1008)
             return
 
-    await manager.connect(websocket, channel=channel, restaurant_id=1)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f'{{"type": "PONG", "channel": "{channel}"}}')
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, channel=channel, restaurant_id=1)
-    except Exception:
-        manager.disconnect(websocket, channel=channel, restaurant_id=1)
+        if user.role == UserRole.PLATFORM_SUPER_ADMIN:
+            resolved_restaurant_id = restaurant_id if restaurant_id is not None else user.restaurant_id
+            if not resolved_restaurant_id:
+                await websocket.close(code=1008)
+                return
+        else:
+            if not user.restaurant_id or (restaurant_id is not None and restaurant_id != user.restaurant_id):
+                await websocket.close(code=1008)
+                return
+            resolved_restaurant_id = user.restaurant_id
+    else:
+        if token is not None:
+            user = _authenticate_ws_token(token)
+            if not user:
+                await websocket.close(code=1008)
+                return
+            if user.role == UserRole.PLATFORM_SUPER_ADMIN:
+                resolved_restaurant_id = restaurant_id if restaurant_id is not None else user.restaurant_id
+            else:
+                if not user.restaurant_id or (restaurant_id is not None and restaurant_id != user.restaurant_id):
+                    await websocket.close(code=1008)
+                    return
+                resolved_restaurant_id = user.restaurant_id
+        else:
+            resolved_restaurant_id = restaurant_id
+
+        if not resolved_restaurant_id:
+            await websocket.close(code=1008)
+            return
+
+    if not _is_active_restaurant(resolved_restaurant_id):
+        await websocket.close(code=1008)
+        return
+
+    await manager.connect(websocket, channel=norm_channel, restaurant_id=resolved_restaurant_id)
+    await _run_ws_heartbeat(
+        websocket,
+        {"type": "PONG", "tenant_id": resolved_restaurant_id, "channel": norm_channel},
+        lambda: manager.disconnect(websocket, channel=norm_channel, restaurant_id=resolved_restaurant_id),
+    )
+
 
 @app.websocket("/ws/tenant/{tenant_id}/table/{table_id}")
-async def websocket_tenant_table_endpoint(websocket: WebSocket, tenant_id: int, table_id: int):
-    await manager.connect(websocket, table_id=table_id, restaurant_id=tenant_id)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f'{{"type": "PONG", "tenant_id": {tenant_id}, "table_id": {table_id}}}')
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, table_id=table_id, restaurant_id=tenant_id)
-    except Exception:
-        manager.disconnect(websocket, table_id=table_id, restaurant_id=tenant_id)
-
-@app.websocket("/ws/table/{table_id}")
-async def websocket_table_endpoint(websocket: WebSocket, table_id: int):
-    # Dynamically resolve restaurant_id from table record
-    resolved_tenant_id = 1
-    try:
-        db = SessionLocal()
-        table = db.query(Table).filter(Table.id == table_id).first()
-        if table and table.restaurant_id:
-            resolved_tenant_id = table.restaurant_id
-        db.close()
-    except Exception:
-        resolved_tenant_id = 1
+async def websocket_tenant_table_endpoint(
+    websocket: WebSocket,
+    tenant_id: int,
+    table_id: int,
+    token: Optional[str] = Query(None),
+    session_token: Optional[str] = Query(None),
+):
+    resolved_tenant_id = _resolve_table_ws_tenant(
+        websocket,
+        table_id=table_id,
+        expected_tenant_id=tenant_id,
+        token=token,
+        session_token=session_token,
+    )
+    if resolved_tenant_id is None:
+        await websocket.close(code=1008)
+        return
 
     await manager.connect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            await websocket.send_text(f'{{"type": "PONG", "tenant_id": {resolved_tenant_id}, "table_id": {table_id}}}')
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
-    except Exception:
-        manager.disconnect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
+    await _run_ws_heartbeat(
+        websocket,
+        {"type": "PONG", "tenant_id": resolved_tenant_id, "table_id": table_id},
+        lambda: manager.disconnect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id),
+    )
+
+
+@app.websocket("/ws/table/{table_id}")
+async def websocket_table_endpoint(
+    websocket: WebSocket,
+    table_id: int,
+    token: Optional[str] = Query(None),
+    session_token: Optional[str] = Query(None),
+):
+    resolved_tenant_id = _resolve_table_ws_tenant(
+        websocket,
+        table_id=table_id,
+        expected_tenant_id=None,
+        token=token,
+        session_token=session_token,
+    )
+    if resolved_tenant_id is None:
+        await websocket.close(code=1008)
+        return
+
+    await manager.connect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id)
+    await _run_ws_heartbeat(
+        websocket,
+        {"type": "PONG", "tenant_id": resolved_tenant_id, "table_id": table_id},
+        lambda: manager.disconnect(websocket, table_id=table_id, restaurant_id=resolved_tenant_id),
+    )
 
 if __name__ == "__main__":
     import uvicorn

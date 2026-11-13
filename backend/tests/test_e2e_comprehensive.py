@@ -23,9 +23,16 @@ from app.core.security import generate_table_qr_token
 
 client = TestClient(app)
 
+
+def _staff_headers(username: str = "admin", password: str = "admin123") -> dict:
+    resp = client.post("/api/v1/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, f"Staff login failed for {username}: {resp.text}"
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
 def _create_test_order(table_number: str = None):
     """Helper to create a standard order and return (order_id, table_id)."""
-    tables = client.get("/api/v1/tables/").json()
+    tables = client.get("/api/v1/tables/", headers=_staff_headers()).json()
     if table_number:
         t = next(tbl for tbl in tables if tbl["table_number"] == table_number)
     else:
@@ -126,8 +133,9 @@ def test_scenario_01_seeded_roles_login():
 # ==============================================================================
 def test_scenario_02_qr_table_validation_and_session():
     """Verify customer QR code scanning, tamper detection, and active session creation."""
-    # Fetch Table T-01
-    tables_resp = client.get("/api/v1/tables/")
+    headers = _staff_headers("admin", "admin123")
+    # Fetch Table T-01 as authenticated staff to obtain QR token
+    tables_resp = client.get("/api/v1/tables/", headers=headers)
     assert tables_resp.status_code == 200
     tables = tables_resp.json()
     assert len(tables) > 0
@@ -146,7 +154,7 @@ def test_scenario_02_qr_table_validation_and_session():
     assert val_data["session_token"].startswith("sess_")
 
     # Table status should now be Occupied or Order Pending
-    updated_tables = client.get("/api/v1/tables/").json()
+    updated_tables = client.get("/api/v1/tables/", headers=headers).json()
     t1_updated = next(t for t in updated_tables if t["id"] == t1["id"])
     assert t1_updated["status"] in [
         TableStatus.OCCUPIED.value,
@@ -187,7 +195,7 @@ def test_scenario_03_menu_browsing_and_customization():
 def test_scenario_04_and_05_cart_and_place_order():
     """Verify multi-item order placement with customizations, GST, and service charge."""
     # Use Table T-03
-    tables = client.get("/api/v1/tables/").json()
+    tables = client.get("/api/v1/tables/", headers=_staff_headers()).json()
     t3 = next(t for t in tables if t["table_number"] == "T-03")
     
     # Establish customer session
@@ -286,15 +294,16 @@ def test_scenario_06_verify_order_in_database():
 def test_scenario_07_kitchen_dashboard_active_orders():
     """Verify kitchen display system (KDS) receives newly placed orders."""
     order_id, _ = _create_test_order()
-    
-    kds_resp = client.get("/api/v1/kitchen/active")
+    chef_headers = _staff_headers("chef", "chef123")
+
+    kds_resp = client.get("/api/v1/kitchen/active", headers=chef_headers)
     assert kds_resp.status_code == 200
     kds_data = kds_resp.json()
     assert "new_orders" in kds_data
     assert "preparing" in kds_data
     assert "ready" in kds_data
     assert "completed" in kds_data
-    
+
     placed_in_kds = next((o for o in kds_data["new_orders"] if o["id"] == order_id), None)
     assert placed_in_kds is not None, f"Order {order_id} not found in kitchen new_orders"
     assert placed_in_kds["status"] == "PLACED"
@@ -306,17 +315,18 @@ def test_scenario_07_kitchen_dashboard_active_orders():
 def test_scenario_08_order_status_placed_to_preparing():
     """Verify kitchen staff can advance order status to PREPARING."""
     order_id, _ = _create_test_order()
+    chef_headers = _staff_headers("chef", "chef123")
 
     update_payload = {
         "order_id": order_id,
         "status": "PREPARING",
         "chef_name": "Executive Chef Sanjeev"
     }
-    update_resp = client.post("/api/v1/kitchen/update-status", json=update_payload)
+    update_resp = client.post("/api/v1/kitchen/update-status", json=update_payload, headers=chef_headers)
     assert update_resp.status_code == 200
     assert update_resp.json()["status"] == "PREPARING"
 
-    kds_data = client.get("/api/v1/kitchen/active").json()
+    kds_data = client.get("/api/v1/kitchen/active", headers=chef_headers).json()
     prep_order = next((o for o in kds_data["preparing"] if o["id"] == order_id), None)
     assert prep_order is not None
     assert prep_order["status"] == "PREPARING"
@@ -326,16 +336,36 @@ def test_scenario_08_order_status_placed_to_preparing():
 # ==============================================================================
 def test_scenario_09_customer_order_tracking_updates():
     """Verify customer order tracking view reflects status and history."""
-    order_id, _ = _create_test_order()
+    chef_headers = _staff_headers("chef", "chef123")
+    tables = client.get("/api/v1/tables/", headers=_staff_headers()).json()
+    t2 = next(t for t in tables if t["table_number"] == "T-02")
+    client.put(f"/api/v1/tables/{t2['id']}", json={"status": TableStatus.AVAILABLE.value}, headers=_staff_headers())
+    val_resp = client.post("/api/v1/tables/validate-qr", json={"qr_token": t2["qr_token"]})
+    assert val_resp.status_code == 200
+    session_token = val_resp.json()["session_token"]
+    items = client.get("/api/v1/menu/items").json()
+    order_resp = client.post(
+        "/api/v1/orders/",
+        json={
+            "restaurant_id": t2["restaurant_id"],
+            "table_id": t2["id"],
+            "customer_name": "Tracking Guest",
+            "items": [{"menu_item_id": items[0]["id"], "item_name": items[0]["name"], "unit_price": items[0]["price"], "quantity": 1, "customizations": []}],
+            "tip_amount": 0.0,
+        },
+        headers={"X-Table-Session": session_token},
+    )
+    assert order_resp.status_code == 201
+    order_id = order_resp.json()["id"]
 
     # Move to PREPARING
     client.post("/api/v1/kitchen/update-status", json={
         "order_id": order_id,
         "status": "PREPARING",
         "chef_name": "Executive Chef Sanjeev"
-    })
+    }, headers=chef_headers)
 
-    track_resp = client.get(f"/api/v1/orders/{order_id}")
+    track_resp = client.get(f"/api/v1/orders/{order_id}", headers={"X-Table-Session": session_token})
     assert track_resp.status_code == 200
     track_data = track_resp.json()
     assert track_data["status"] == "PREPARING"
@@ -350,15 +380,16 @@ def test_scenario_09_customer_order_tracking_updates():
 def test_scenario_10_and_11_ready_to_serve_and_waiter_view():
     """Verify advancing order to READY and SERVED, and waiter dashboard synchronization."""
     order_id, table_id = _create_test_order("T-07")
+    chef_headers = _staff_headers("chef", "chef123")
 
     # Chef marks READY
     client.post("/api/v1/kitchen/update-status", json={
         "order_id": order_id,
         "status": "READY",
         "chef_name": "Executive Chef Sanjeev"
-    })
+    }, headers=chef_headers)
 
-    kds_data = client.get("/api/v1/kitchen/active").json()
+    kds_data = client.get("/api/v1/kitchen/active", headers=chef_headers).json()
     ready_order = next((o for o in kds_data["ready"] if o["id"] == order_id), None)
     assert ready_order is not None
     assert ready_order["status"] == "READY"
@@ -383,7 +414,8 @@ def test_scenario_10_and_11_ready_to_serve_and_waiter_view():
 # ==============================================================================
 def test_scenario_12_service_requests_flow():
     """Verify service requests creation, table status update, and staff acknowledgment."""
-    tables = client.get("/api/v1/tables/").json()
+    admin_headers = _staff_headers("admin", "admin123")
+    tables = client.get("/api/v1/tables/", headers=admin_headers).json()
     table = tables[0]
 
     # Customer calls waiter for water
@@ -409,13 +441,13 @@ def test_scenario_12_service_requests_flow():
     r2_data = req2.json()
 
     # Table status should have automatically updated to Bill Requested
-    updated_table = next(t for t in client.get("/api/v1/tables/").json() if t["id"] == table["id"])
+    updated_table = next(t for t in client.get("/api/v1/tables/", headers=admin_headers).json() if t["id"] == table["id"])
     assert updated_table["status"] in ["Bill Requested", TableStatus.BILL_REQUESTED.value]
 
     waiter_login = client.post("/api/v1/auth/login", json={"username": "waiter", "password": "waiter123"}).json()
     waiter_headers = {"Authorization": f"Bearer {waiter_login['access_token']}"}
 
-    active_requests = client.get("/api/v1/service-requests/?status=PENDING").json()
+    active_requests = client.get("/api/v1/service-requests/?status=PENDING", headers=waiter_headers).json()
     assert any(r["id"] == r1_data["id"] for r in active_requests)
 
     # Waiter acknowledges request 1
@@ -443,7 +475,7 @@ def test_scenario_13_table_status_lifecycle():
     headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
 
     # Pick Table T-05
-    tables = client.get("/api/v1/tables/").json()
+    tables = client.get("/api/v1/tables/", headers=headers).json()
     t5 = next(t for t in tables if t["table_number"] == "T-05")
     table_id = t5["id"]
 
@@ -468,7 +500,7 @@ def test_scenario_14_generate_bill_and_verify_taxes():
     """Verify automatic bill calculation: Subtotal + 5% GST + 5% Service Charge + Tip."""
     order_id, _ = _create_test_order()
 
-    bill_resp = client.get(f"/api/v1/billing/order/{order_id}")
+    bill_resp = client.get(f"/api/v1/billing/order/{order_id}", headers=_staff_headers())
     assert bill_resp.status_code == 200
     bill = bill_resp.json()
 
@@ -490,8 +522,9 @@ def test_scenario_14_generate_bill_and_verify_taxes():
 # ==============================================================================
 def test_scenario_15_bill_splitting_equal_and_item_based():
     """Verify split bill computation for equal portions and itemized allocations."""
+    headers = _staff_headers()
     order_id, _ = _create_test_order()
-    bill = client.get(f"/api/v1/billing/order/{order_id}").json()
+    bill = client.get(f"/api/v1/billing/order/{order_id}", headers=headers).json()
     bill_id = bill["id"]
     total = bill["final_amount"]
 
@@ -504,7 +537,7 @@ def test_scenario_15_bill_splitting_equal_and_item_based():
         {"split_type": "EQUAL", "person_name": "Charlie", "amount": diff},
     ]
 
-    split_resp1 = client.post(f"/api/v1/billing/{bill_id}/splits", json=equal_splits_payload)
+    split_resp1 = client.post(f"/api/v1/billing/{bill_id}/splits", json=equal_splits_payload, headers=headers)
     assert split_resp1.status_code == 200
     splits1 = split_resp1.json()
     assert len(splits1) == 3
@@ -515,7 +548,7 @@ def test_scenario_15_bill_splitting_equal_and_item_based():
         {"split_type": "BY_ITEM", "person_name": "Alice", "amount": round(total * 0.6, 2)},
         {"split_type": "BY_ITEM", "person_name": "Bob", "amount": round(total * 0.4, 2)},
     ]
-    split_resp2 = client.post(f"/api/v1/billing/{bill_id}/splits", json=item_splits_payload)
+    split_resp2 = client.post(f"/api/v1/billing/{bill_id}/splits", json=item_splits_payload, headers=headers)
     assert split_resp2.status_code == 200
     splits2 = split_resp2.json()
     assert len(splits2) == 2
@@ -529,8 +562,9 @@ def test_scenario_16_and_17_razorpay_payment_and_completion(monkeypatch):
     monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
     monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
 
+    headers = _staff_headers()
     order_id, table_id = _create_test_order()
-    bill = client.get(f"/api/v1/billing/order/{order_id}").json()
+    bill = client.get(f"/api/v1/billing/order/{order_id}", headers=headers).json()
     bill_id = bill["id"]
     final_amount = bill["final_amount"]
 
@@ -573,15 +607,15 @@ def test_scenario_16_and_17_razorpay_payment_and_completion(monkeypatch):
     assert ver_data["bill_status"] == "PAID"
 
     # 3. Check updated Bill, Order and Table state in DB
-    updated_bill = client.get(f"/api/v1/billing/{bill_id}").json()
+    updated_bill = client.get(f"/api/v1/billing/{bill_id}", headers=headers).json()
     assert updated_bill["status"] == "PAID"
     assert len(updated_bill["payments"]) >= 1
 
-    updated_order = client.get(f"/api/v1/orders/{order_id}").json()
+    updated_order = client.get(f"/api/v1/orders/{order_id}", headers=headers).json()
     assert updated_order["payment_status"] == "PAID"
     assert updated_order["status"] == "COMPLETED"
 
-    tables = client.get("/api/v1/tables/").json()
+    tables = client.get("/api/v1/tables/", headers=headers).json()
     table = next(t for t in tables if t["id"] == table_id)
     assert table["status"] in ["Cleaning", TableStatus.CLEANING.value]
 
@@ -593,6 +627,9 @@ def test_scenario_18_reservation_creation_and_management():
     admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "admin123"}).json()
     headers = {"Authorization": f"Bearer {admin_login['access_token']}"}
 
+    tables = client.get("/api/v1/tables/", headers=headers).json()
+    active_table = next(t for t in tables if t.get("is_active", True))
+
     unique_slot_time = f"{int(time.time() % 10) + 10}:{int((time.time() * 100) % 60):02d}"
     unique_date = f"2026-12-{(int(time.time()) % 25) + 1:02d}"
     res_payload = {
@@ -603,7 +640,7 @@ def test_scenario_18_reservation_creation_and_management():
         "guest_count": 4,
         "reservation_date": unique_date,
         "reservation_time": unique_slot_time,
-        "table_id": 1,
+        "table_id": active_table["id"],
         "special_requests": "Window table, anniversary celebration"
     }
 
@@ -772,16 +809,27 @@ def test_additional_incorrect_passwords():
 # ==============================================================================
 def test_additional_websocket_connection_and_reconnection():
     """Verify real-time WebSocket channel connection, ping-pong communication, disconnect, and reconnect."""
-    # Connect to kitchen channel
-    with client.websocket_connect("/ws/kitchen") as ws1:
+    chef_login = client.post("/api/v1/auth/login", json={"username": "chef", "password": "chef123"})
+    assert chef_login.status_code == 200
+    chef_token = chef_login.json()["access_token"]
+
+    # Establish or retrieve an active QR customer session for table 1
+    tables = client.get("/api/v1/tables/", headers=_staff_headers()).json()
+    t1 = next(t for t in tables if t["id"] == 1)
+    val_resp = client.post("/api/v1/tables/validate-qr", json={"qr_token": t1["qr_token"]})
+    assert val_resp.status_code == 200
+    table_session_token = val_resp.json()["session_token"]
+
+    # Connect to kitchen channel with valid kitchen token
+    with client.websocket_connect(f"/ws/kitchen?token={chef_token}") as ws1:
         ws1.send_text("PING")
         reply = ws1.receive_text()
         data = json.loads(reply)
         assert data.get("type") == "PONG"
         assert data.get("channel") == "kitchen"
 
-    # Connect to table-specific channel
-    with client.websocket_connect("/ws/table/1") as ws2:
+    # Connect to table-specific channel with valid customer table session token
+    with client.websocket_connect(f"/ws/table/1?session_token={table_session_token}") as ws2:
         ws2.send_text("PING")
         reply = ws2.receive_text()
         data = json.loads(reply)
@@ -789,7 +837,7 @@ def test_additional_websocket_connection_and_reconnection():
         assert data.get("table_id") == 1
 
     # Reconnect to kitchen channel
-    with client.websocket_connect("/ws/kitchen") as ws3:
+    with client.websocket_connect(f"/ws/kitchen?token={chef_token}") as ws3:
         ws3.send_text("PING2")
         reply = ws3.receive_text()
         assert "PONG" in reply
@@ -803,7 +851,7 @@ def test_additional_duplicate_payment_callbacks(monkeypatch):
     monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
 
     order_id, _ = _create_test_order()
-    bill = client.get(f"/api/v1/billing/order/{order_id}").json()
+    bill = client.get(f"/api/v1/billing/order/{order_id}", headers=_staff_headers()).json()
     bill_id = bill["id"]
     amount = bill["final_amount"]
 
@@ -846,7 +894,7 @@ def test_additional_duplicate_payment_callbacks(monkeypatch):
 # ==============================================================================
 def test_additional_simultaneous_orders_concurrency():
     """Verify simultaneous multi-threaded order submissions are safely persisted without race conditions."""
-    tables = client.get("/api/v1/tables/").json()
+    tables = client.get("/api/v1/tables/", headers=_staff_headers()).json()
     items = client.get("/api/v1/menu/items").json()
     item = items[0]
 

@@ -12,7 +12,7 @@ class TableBase(BaseModel):
     pos_y: int = 100
 
 class TableCreate(TableBase):
-    restaurant_id: int = 1
+    restaurant_id: Optional[int] = None
 
 class TableUpdate(BaseModel):
     table_number: Optional[str] = None

@@ -4,6 +4,12 @@ from app.main import app
 
 client = TestClient(app)
 
+
+def _staff_headers(username: str = "admin", password: str = "admin123") -> dict:
+    res = client.post("/api/v1/auth/login", json={"username": username, "password": password})
+    assert res.status_code == 200, f"Staff login failed for {username}: {res.text}"
+    return {"Authorization": f"Bearer {res.json()['access_token']}"}
+
 def test_health_check():
     response = client.get("/health")
     assert response.status_code == 200
@@ -44,8 +50,8 @@ def test_menu_categories_and_items():
     assert any("Biryani" in item["name"] for item in items)
 
 def test_table_qr_validation():
-    # Retrieve tables
-    tables_res = client.get("/api/v1/tables/")
+    # Retrieve tables as authenticated staff to inspect QR tokens
+    tables_res = client.get("/api/v1/tables/", headers=_staff_headers())
     assert tables_res.status_code == 200
     tables = tables_res.json()
     assert len(tables) > 0
@@ -118,29 +124,32 @@ def test_order_creation_and_lifecycle():
     assert order_data["total_amount"] == 886.0  # 760 + 38 + 38 + 50
 
     # 2. Kitchen advances status to PREPARING
+    chef_headers = _staff_headers("chef", "chef123")
+    waiter_headers = _staff_headers("waiter", "waiter123")
     kitchen_res = client.post("/api/v1/kitchen/update-status", json={
         "order_id": order_id,
         "status": "PREPARING",
         "chef_name": "Chef Kabir Sen"
-    })
+    }, headers=chef_headers)
     assert kitchen_res.status_code == 200
 
     # 3. Advance to READY
     ready_res = client.post("/api/v1/kitchen/update-status", json={
         "order_id": order_id,
         "status": "READY"
-    })
+    }, headers=chef_headers)
     assert ready_res.status_code == 200
 
     # 4. Advance to SERVED
     served_res = client.patch(f"/api/v1/orders/{order_id}/status", json={
         "status": "SERVED",
         "changed_by": "Head Waiter"
-    })
+    }, headers=waiter_headers)
     assert served_res.status_code == 200
     assert served_res.json()["status"] == "SERVED"
 
 def test_service_request_flow():
+    waiter_headers = _staff_headers("waiter", "waiter123")
     # Customer requests water
     req_res = client.post("/api/v1/service-requests/", json={
         "restaurant_id": 1,
@@ -156,14 +165,14 @@ def test_service_request_flow():
     ack_res = client.patch(f"/api/v1/service-requests/{req_id}/status", json={
         "status": "ACKNOWLEDGED",
         "staff_notes": "Waiter is serving now"
-    })
+    }, headers=waiter_headers)
     assert ack_res.status_code == 200
     assert ack_res.json()["status"] == "ACKNOWLEDGED"
 
     # Staff resolves request
     resolve_res = client.patch(f"/api/v1/service-requests/{req_id}/status", json={
         "status": "RESOLVED"
-    })
+    }, headers=waiter_headers)
     assert resolve_res.status_code == 200
     assert resolve_res.json()["status"] == "RESOLVED"
 
@@ -178,8 +187,19 @@ def test_billing_and_payment(monkeypatch):
     monkeypatch.setattr(settings, "EMERGENCY_DISABLE_PAYMENTS", False)
     monkeypatch.setattr(settings, "FLOW_A_ENABLED", True)
 
+    admin_headers = _staff_headers("admin", "admin123")
+    db_init = SessionLocal()
+    try:
+        from app.models.billing import Bill, BillStatus
+        b_init = db_init.query(Bill).filter(Bill.order_id == 1).first()
+        if b_init and b_init.status == BillStatus.PAID:
+            b_init.status = BillStatus.UNPAID
+            db_init.commit()
+    finally:
+        db_init.close()
+
     # Retrieve bill for order 1
-    bill_res = client.get("/api/v1/billing/order/1")
+    bill_res = client.get("/api/v1/billing/order/1", headers=admin_headers)
     assert bill_res.status_code == 200
     bill = bill_res.json()
     bill_id = bill["id"]
@@ -191,7 +211,7 @@ def test_billing_and_payment(monkeypatch):
         {"split_type": "EQUAL", "person_name": "Bob", "amount": round(bill["final_amount"] / 3, 2)},
         {"split_type": "EQUAL", "person_name": "Charlie", "amount": round(bill["final_amount"] / 3, 2)},
     ]
-    split_res = client.post(f"/api/v1/billing/{bill_id}/splits", json=splits_payload)
+    split_res = client.post(f"/api/v1/billing/{bill_id}/splits", json=splits_payload, headers=admin_headers)
     assert split_res.status_code == 200
     assert len(split_res.json()) == 3
 
@@ -230,7 +250,7 @@ def test_billing_and_payment(monkeypatch):
     assert verify_res.json()["success"] is True
 
 def test_analytics_kpi_computation():
-    res = client.get("/api/v1/analytics/overview")
+    res = client.get("/api/v1/analytics/overview", headers=_staff_headers("admin", "admin123"))
     assert res.status_code == 200
     data = res.json()
     kpis = data["kpis"]

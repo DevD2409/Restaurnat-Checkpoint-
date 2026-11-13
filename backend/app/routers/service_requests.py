@@ -3,8 +3,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import oauth2_scheme, require_roles
-from app.core.security import decode_access_token
+from app.core.dependencies import (
+    STAFF_ROLES,
+    require_roles,
+    resolve_explicit_tenant_id,
+)
 from app.models.service_request import ServiceRequest, ServiceRequestType, ServiceRequestStatus
 from app.models.table import Table, TableStatus
 from app.models.user import User, UserRole
@@ -20,7 +23,7 @@ async def create_service_request(
     req_data: ServiceRequestCreate,
     db: Session = Depends(get_db)
 ):
-    table = db.query(Table).filter(Table.id == req_data.table_id).first()
+    table = db.query(Table).filter(Table.id == req_data.table_id, Table.is_active == True).first()
     if not table:
         raise HTTPException(status_code=404, detail="Table not found")
 
@@ -68,10 +71,10 @@ async def create_service_request(
 
 @router.get("/", response_model=List[ServiceRequestResponse])
 def get_service_requests(
-    status: Optional[ServiceRequestStatus] = None,
+    status_filter: Optional[ServiceRequestStatus] = Query(None, alias="status"),
     table_id: Optional[int] = None,
     restaurant_id: Optional[int] = Query(None),
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: User = Depends(require_roles(STAFF_ROLES)),
     db: Session = Depends(get_db)
 ):
     query = db.query(ServiceRequest).options(
@@ -79,22 +82,11 @@ def get_service_requests(
         joinedload(ServiceRequest.assigned_staff)
     )
 
-    target_id = restaurant_id
-    if token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user:
-                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                    target_id = user.restaurant_id
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
+    query = query.filter(ServiceRequest.restaurant_id == target_id)
 
-    if target_id is not None:
-        query = query.filter(ServiceRequest.restaurant_id == target_id)
-    else:
-        query = query.filter(ServiceRequest.restaurant_id == 1)
-
-    if status:
-        query = query.filter(ServiceRequest.status == status)
+    if status_filter:
+        query = query.filter(ServiceRequest.status == status_filter)
     if table_id:
         query = query.filter(ServiceRequest.table_id == table_id)
 
@@ -124,7 +116,7 @@ def get_service_requests(
 async def update_service_request_status(
     request_id: int,
     status_update: ServiceRequestStatusUpdate,
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: User = Depends(require_roles(STAFF_ROLES)),
     db: Session = Depends(get_db)
 ):
     req = db.query(ServiceRequest).options(
@@ -135,22 +127,29 @@ async def update_service_request_status(
     if not req:
         raise HTTPException(status_code=404, detail="Service request not found")
 
-    if token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user and user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                if req.restaurant_id != user.restaurant_id:
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Access denied: Cannot update service request of another restaurant"
-                    )
+    resolve_explicit_tenant_id(current_user, req.restaurant_id)
 
     req.status = status_update.status
     if status_update.staff_notes is not None:
         req.staff_notes = status_update.staff_notes
     if status_update.assigned_staff_id is not None:
-        req.assigned_staff_id = status_update.assigned_staff_id
+        assignee = db.query(User).filter(User.id == status_update.assigned_staff_id).first()
+        if not assignee or not assignee.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assigned staff user not found or inactive",
+            )
+        if assignee.role in (UserRole.PLATFORM_SUPER_ADMIN, UserRole.CUSTOMER):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assigned user must hold a restaurant staff role",
+            )
+        if assignee.restaurant_id != req.restaurant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant assignment denied: assigned_staff_id belongs to another restaurant",
+            )
+        req.assigned_staff_id = assignee.id
 
     now = datetime.now(timezone.utc)
     if status_update.status == ServiceRequestStatus.ACKNOWLEDGED and not req.acknowledged_at:

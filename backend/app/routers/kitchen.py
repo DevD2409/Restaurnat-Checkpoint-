@@ -3,9 +3,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import require_roles, oauth2_scheme
-from app.core.security import decode_access_token
-from app.models.user import User, UserRole
+from app.core.dependencies import (
+    KITCHEN_ROLES,
+    STAFF_ROLES,
+    require_roles,
+    resolve_explicit_tenant_id,
+)
+from app.models.user import User
 from app.models.order import Order, OrderItem, OrderStatusHistory, OrderStatus
 from app.websocket.connection_manager import manager
 
@@ -14,23 +18,14 @@ router = APIRouter(prefix="/kitchen", tags=["Kitchen Display System (KDS)"])
 @router.get("/active")
 def get_kitchen_active_orders(
     restaurant_id: Optional[int] = Query(None),
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: User = Depends(require_roles(STAFF_ROLES)),
     db: Session = Depends(get_db)
 ):
     """
     Returns live orders in kitchen pipeline strictly isolated to the authenticated restaurant tenant.
     Prevents cross-restaurant kitchen queue leakage.
     """
-    target_id = restaurant_id
-    if token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user:
-                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                    target_id = user.restaurant_id
-    if target_id is None:
-        target_id = 1
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
 
     orders = db.query(Order).options(
         joinedload(Order.items),
@@ -109,11 +104,25 @@ def get_kitchen_active_orders(
 async def update_kitchen_item_status(
     item_id: int,
     status_str: str = Query(..., description="QUEUED, COOKING, READY"),
+    restaurant_id: Optional[int] = Query(None),
+    current_user: User = Depends(require_roles(KITCHEN_ROLES)),
     db: Session = Depends(get_db)
 ):
-    item = db.query(OrderItem).filter(OrderItem.id == item_id).first()
-    if not item:
+    item = (
+        db.query(OrderItem)
+        .options(joinedload(OrderItem.order))
+        .filter(OrderItem.id == item_id)
+        .first()
+    )
+    if not item or not item.order:
         raise HTTPException(status_code=404, detail="Order item not found")
+
+    if restaurant_id is not None and restaurant_id != item.order.restaurant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cross-tenant access denied: supplied restaurant_id does not match order item tenant",
+        )
+    resolve_explicit_tenant_id(current_user, item.order.restaurant_id)
 
     item.status = status_str
     db.commit()
@@ -123,23 +132,43 @@ async def update_kitchen_item_status(
 @router.post("/update-status")
 async def kitchen_update_status(
     payload: dict,
+    current_user: User = Depends(require_roles(KITCHEN_ROLES)),
     db: Session = Depends(get_db)
 ):
     order_id = payload.get("order_id")
     new_status_str = payload.get("status")
-    chef_name = payload.get("chef_name", "Kitchen Chef")
+    chef_name = payload.get("chef_name") or current_user.full_name or current_user.username
+    requested_restaurant_id = payload.get("restaurant_id")
 
     if not order_id or not new_status_str:
         raise HTTPException(status_code=400, detail="Missing order_id or status")
+
+    try:
+        order_id_int = int(order_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid order_id")
 
     try:
         new_status = OrderStatus(new_status_str)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid order status")
 
-    order = db.query(Order).options(joinedload(Order.table)).filter(Order.id == order_id).first()
+    order = db.query(Order).options(joinedload(Order.table)).filter(Order.id == order_id_int).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
+    if requested_restaurant_id is not None:
+        try:
+            req_rid_int = int(requested_restaurant_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid restaurant_id")
+        if req_rid_int != order.restaurant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant access denied: supplied restaurant_id does not match order tenant",
+            )
+
+    resolve_explicit_tenant_id(current_user, order.restaurant_id)
 
     old_status = order.status
     order.status = new_status

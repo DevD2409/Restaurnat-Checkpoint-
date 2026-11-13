@@ -7,8 +7,14 @@ import qrcode
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.security import generate_table_qr_token, verify_table_qr_token, decode_access_token
-from app.core.dependencies import require_roles, oauth2_scheme
+from app.core.security import generate_table_qr_token, verify_table_qr_token
+from app.core.dependencies import (
+    STAFF_ROLES as CENTRAL_STAFF_ROLES,
+    get_optional_current_user,
+    is_staff_user,
+    require_roles,
+    resolve_explicit_tenant_id,
+)
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
 from app.models.table import Table, TableSession, TableStatus
@@ -36,30 +42,72 @@ STAFF_ROLES = [
 def get_tables(
     restaurant_id: Optional[int] = Query(None),
     slug: Optional[str] = Query(None),
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
-    target_id = restaurant_id
+    requested_id = restaurant_id
     if slug:
-        r = db.query(Restaurant).filter(Restaurant.slug == slug).first()
-        if r:
-            target_id = r.id
-    elif token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user and user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                target_id = user.restaurant_id
+        r = db.query(Restaurant).filter(Restaurant.slug == slug, Restaurant.is_active == True).first()
+        if not r:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+        if requested_id is not None and requested_id != r.id:
+            raise HTTPException(status_code=400, detail="Mismatched restaurant slug and restaurant_id")
+        requested_id = r.id
 
-    query = db.query(Table).filter(Table.is_active == True)
-    if target_id is not None:
-        query = query.filter(Table.restaurant_id == target_id)
+    staff_access = is_staff_user(current_user)
+    if staff_access:
+        target_id = resolve_explicit_tenant_id(current_user, requested_id)
     else:
-        query = query.filter(Table.restaurant_id == 1)
+        if requested_id is None:
+            if current_user is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access forbidden: insufficient role privileges",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication or restaurant identifier required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        restaurant = db.query(Restaurant).filter(
+            Restaurant.id == requested_id,
+            Restaurant.is_active == True,
+        ).first()
+        if not restaurant:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+        target_id = restaurant.id
 
-    tables = query.order_by(Table.table_number.asc()).all()
+    tables = (
+        db.query(Table)
+        .filter(Table.is_active == True, Table.restaurant_id == target_id)
+        .order_by(Table.table_number.asc())
+        .all()
+    )
+
     results = []
     for t in tables:
+        if not staff_access:
+            # Redact signed QR tokens, active session IDs, order IDs, and bill amounts for public callers
+            t_dict = {
+                "id": t.id,
+                "restaurant_id": t.restaurant_id,
+                "table_number": t.table_number,
+                "capacity": t.capacity,
+                "section": t.section,
+                "status": t.status,
+                "pos_x": t.pos_x,
+                "pos_y": t.pos_y,
+                "qr_token": None,
+                "qr_code_url": None,
+                "current_session_id": None,
+                "is_active": t.is_active,
+                "active_order_id": None,
+                "active_bill_amount": None,
+                "session_start_time": None,
+            }
+            results.append(TableResponse(**t_dict))
+            continue
+
         active_session = db.query(TableSession).filter(
             TableSession.table_id == t.id,
             TableSession.is_active == True
@@ -108,11 +156,7 @@ async def create_table(
         UserRole.MANAGER
     ]))
 ):
-    target_id = current_user.restaurant_id
-    if current_user.role == UserRole.PLATFORM_SUPER_ADMIN and table_data.restaurant_id:
-        target_id = table_data.restaurant_id
-    if not target_id:
-        target_id = 1
+    target_id = resolve_explicit_tenant_id(current_user, table_data.restaurant_id)
 
     existing = db.query(Table).filter(
         Table.restaurant_id == target_id,
@@ -249,6 +293,7 @@ def validate_qr_token(req: QRValidationRequest, db: Session = Depends(get_db)):
             is_active=True
         )
         db.add(active_session)
+        db.flush()
         table.status = TableStatus.OCCUPIED
         table.current_session_id = active_session.id
         db.commit()
@@ -347,10 +392,15 @@ async def end_table_session(
     return {"message": f"Table {table.table_number} session ended. Table is now available."}
 
 @router.get("/{table_id}/qr-code-image")
-def get_table_qr_image(table_id: int, db: Session = Depends(get_db)):
+def get_table_qr_image(
+    table_id: int,
+    current_user: User = Depends(require_roles(CENTRAL_STAFF_ROLES)),
+    db: Session = Depends(get_db),
+):
     table = db.query(Table).filter(Table.id == table_id).first()
     if not table or not table.qr_token:
         raise HTTPException(status_code=404, detail="Table or QR token not found")
+    resolve_explicit_tenant_id(current_user, table.restaurant_id)
 
     qr_data = f"/table/{table.qr_token}"
     img = qrcode.make(qr_data)

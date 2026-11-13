@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.core.database import get_db
-from app.core.dependencies import require_roles, get_current_user
+from app.core.dependencies import require_roles, get_current_user, resolve_explicit_tenant_id
 from app.models.user import User, UserRole
 from app.models.feedback import Feedback, FeedbackDishRating, FeedbackPhoto
 from app.models.restaurant import Restaurant
@@ -139,11 +139,20 @@ def submit_feedback(data: FeedbackCreate, db: Session = Depends(get_db)):
 
         is_verified_dining = True
 
-    # Resolve fallback restaurant by slug or default
-    if not target_restaurant_id and data.restaurant_slug:
-        r = db.query(Restaurant).filter(Restaurant.slug == data.restaurant_slug).first()
-        if r:
-            target_restaurant_id = r.id
+    # Resolve fallback restaurant by slug or default; reject unknown slug with 404
+    if data.restaurant_slug is not None and data.restaurant_slug.strip():
+        r = db.query(Restaurant).filter(
+            Restaurant.slug == data.restaurant_slug.strip(),
+            Restaurant.is_active == True,
+        ).first()
+        if not r:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Restaurant not found")
+        if target_restaurant_id and target_restaurant_id != r.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tenant mismatch: restaurant_slug does not match target restaurant",
+            )
+        target_restaurant_id = r.id
     if not target_restaurant_id:
         target_restaurant_id = 1
 
@@ -329,11 +338,7 @@ def get_feedback_analytics(
     Computes comprehensive feedback analytics: overall average, multi-attribute scores,
     dish-level ratings, review distribution, trends, moderation stats, and Google review configuration.
     """
-    target_id = current_user.restaurant_id
-    if current_user.role == UserRole.PLATFORM_SUPER_ADMIN and restaurant_id:
-        target_id = restaurant_id
-    if not target_id:
-        target_id = 1
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
 
     restaurant = db.query(Restaurant).filter(Restaurant.id == target_id).first()
     if not restaurant:

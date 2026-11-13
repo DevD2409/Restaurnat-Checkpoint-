@@ -4,9 +4,12 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, asc
 from app.core.database import get_db
-from app.core.dependencies import oauth2_scheme, require_roles
-from app.core.security import decode_access_token
-from app.models.user import User, UserRole
+from app.core.dependencies import (
+    MANAGEMENT_ROLES,
+    require_roles,
+    resolve_explicit_tenant_id,
+)
+from app.models.user import User
 from app.models.billing import Bill, Payment, BillStatus, PaymentRecordStatus
 from app.models.order import Order, OrderItem, OrderStatus, PaymentStatus
 from app.models.table import Table, TableStatus, TableSession
@@ -21,19 +24,10 @@ router = APIRouter(prefix="/analytics", tags=["Sales Analytics & Operational KPI
 @router.get("/overview", response_model=AnalyticsResponse)
 def get_analytics_overview(
     restaurant_id: Optional[int] = Query(None),
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: User = Depends(require_roles(MANAGEMENT_ROLES)),
     db: Session = Depends(get_db)
 ):
-    target_id = restaurant_id
-    if token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user:
-                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                    target_id = user.restaurant_id
-    if target_id is None:
-        target_id = 1
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
 
     # 1. Total Revenue from successful payments for THIS restaurant
     total_rev_result = db.query(func.coalesce(func.sum(Payment.amount), 0.0)).join(

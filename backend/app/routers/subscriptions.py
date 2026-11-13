@@ -2,10 +2,10 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any, Tuple
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.dependencies import require_roles
+from app.core.dependencies import require_roles, resolve_explicit_tenant_id
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
 from app.models.subscription import (
@@ -639,6 +639,7 @@ async def platform_subscription_webhook(request: Request, db: Session = Depends(
 
 @router.get("/my-status", response_model=RestaurantSubscriptionStatusResponse)
 def get_my_subscription_status(
+    restaurant_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([
         UserRole.PLATFORM_SUPER_ADMIN,
@@ -652,7 +653,7 @@ def get_my_subscription_status(
     Returns current subscription status, live evaluation (considering expiry and grace period),
     days remaining, and feature entitlements.
     """
-    target_rest_id = current_user.restaurant_id or 1
+    target_rest_id = resolve_explicit_tenant_id(current_user, restaurant_id)
     restaurant = db.query(Restaurant).filter(Restaurant.id == target_rest_id).first()
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant not found")
@@ -760,6 +761,7 @@ def get_subscription_invoices(
 
 @router.get("/notifications", response_model=List[SubscriptionNotificationResponse])
 def get_subscription_notifications(
+    restaurant_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([
         UserRole.PLATFORM_SUPER_ADMIN,
@@ -770,7 +772,7 @@ def get_subscription_notifications(
     ]))
 ):
     """Returns renewal and expiration notifications for the restaurant tenant."""
-    target_rest_id = current_user.restaurant_id or 1
+    target_rest_id = resolve_explicit_tenant_id(current_user, restaurant_id)
     notifications = db.query(SubscriptionNotification).filter(
         SubscriptionNotification.restaurant_id == target_rest_id
     ).order_by(SubscriptionNotification.created_at.desc()).all()

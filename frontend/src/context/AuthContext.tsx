@@ -49,6 +49,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     localStorage.removeItem('token');
+    try {
+      sessionStorage.removeItem('smart_restaurant_session_token');
+      localStorage.removeItem('smart_restaurant_session_token');
+    } catch {
+      // ignore
+    }
     setToken(null);
     setUser(null);
   };

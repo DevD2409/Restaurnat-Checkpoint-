@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { CartItem, OrderItemCustomization } from '../types';
+import { CartItem } from '../types';
 
 interface CartContextType {
   items: CartItem[];
   tableId: number | null;
   tableNumber: string | null;
   restaurantId: number;
+  sessionToken: string | null;
   customerName: string;
   tipAmount: number;
   orderInstructions: string;
@@ -13,7 +14,13 @@ interface CartContextType {
   taxAmount: number;
   serviceCharge: number;
   totalAmount: number;
-  setTableSession: (tableId: number, tableNumber: string, restaurantId?: number) => void;
+  setTableSession: (
+    tableId: number,
+    tableNumber: string,
+    restaurantId?: number,
+    sessionToken?: string | null
+  ) => void;
+  clearTableSession: () => void;
   setCustomerName: (name: string) => void;
   setTipAmount: (amount: number) => void;
   setOrderInstructions: (instructions: string) => void;
@@ -28,15 +35,34 @@ const CartContext = createContext<CartContextType | undefined>(undefined);
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [items, setItems] = useState<CartItem[]>(() => {
-    const saved = localStorage.getItem('smart_restaurant_cart');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('smart_restaurant_cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
   const [tableId, setTableId] = useState<number | null>(() => {
-    const saved = localStorage.getItem('smart_restaurant_table_id');
-    return saved ? parseInt(saved, 10) : null;
+    try {
+      const saved = localStorage.getItem('smart_restaurant_table_id');
+      return saved ? parseInt(saved, 10) : null;
+    } catch {
+      return null;
+    }
   });
   const [tableNumber, setTableNumber] = useState<string | null>(() => {
-    return localStorage.getItem('smart_restaurant_table_number') || null;
+    try {
+      return localStorage.getItem('smart_restaurant_table_number') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [sessionToken, setSessionToken] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('smart_restaurant_session_token') || null;
+    } catch {
+      return null;
+    }
   });
   const [restaurantId, setRestaurantId] = useState<number>(1);
   const [customerName, setCustomerName] = useState<string>('Guest');
@@ -44,15 +70,46 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [orderInstructions, setOrderInstructions] = useState<string>('');
 
   useEffect(() => {
-    localStorage.setItem('smart_restaurant_cart', JSON.stringify(items));
+    try {
+      localStorage.setItem('smart_restaurant_cart', JSON.stringify(items));
+    } catch {
+      // storage unavailable
+    }
   }, [items]);
 
-  const setTableSession = (tId: number, tNum: string, rId: number = 1) => {
+  const setTableSession = (
+    tId: number,
+    tNum: string,
+    rId: number = 1,
+    sToken?: string | null
+  ) => {
     setTableId(tId);
     setTableNumber(tNum);
     setRestaurantId(rId);
-    localStorage.setItem('smart_restaurant_table_id', tId.toString());
-    localStorage.setItem('smart_restaurant_table_number', tNum);
+    try {
+      localStorage.setItem('smart_restaurant_table_id', tId.toString());
+      localStorage.setItem('smart_restaurant_table_number', tNum);
+      if (sToken) {
+        setSessionToken(sToken);
+        sessionStorage.setItem('smart_restaurant_session_token', sToken);
+      }
+    } catch {
+      // storage unavailable
+    }
+  };
+
+  const clearTableSession = () => {
+    setTableId(null);
+    setTableNumber(null);
+    setSessionToken(null);
+    try {
+      localStorage.removeItem('smart_restaurant_table_id');
+      localStorage.removeItem('smart_restaurant_table_number');
+      sessionStorage.removeItem('smart_restaurant_session_token');
+      localStorage.removeItem('smart_restaurant_session_token');
+    } catch {
+      // storage unavailable
+    }
   };
 
   const addItem = (itemData: Omit<CartItem, 'id'>) => {
@@ -95,7 +152,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setItems([]);
     setOrderInstructions('');
     setTipAmount(0);
-    localStorage.removeItem('smart_restaurant_cart');
+    try {
+      localStorage.removeItem('smart_restaurant_cart');
+    } catch {
+      // storage unavailable
+    }
   };
 
   const totalItemCount = items.reduce((acc, curr) => acc + curr.quantity, 0);
@@ -116,6 +177,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         tableId,
         tableNumber,
         restaurantId,
+        sessionToken,
         customerName,
         tipAmount,
         orderInstructions,
@@ -124,6 +186,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         serviceCharge,
         totalAmount,
         setTableSession,
+        clearTableSession,
         setCustomerName,
         setTipAmount,
         setOrderInstructions,
@@ -146,4 +209,3 @@ export const useCart = () => {
   }
   return context;
 };
-

@@ -3,28 +3,89 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
+from app.core.dependencies import (
+    authorize_staff_or_table_session_for_table,
+    get_optional_current_user,
+    get_optional_table_session,
+)
 from app.models.billing import Bill, BillSplit, Payment, BillStatus, SplitType
 from app.models.restaurant import Restaurant
 from app.models.order import Order, OrderStatus, PaymentStatus
-from app.models.table import Table, TableStatus
+from app.models.table import Table, TableSession, TableStatus
+from app.models.user import User
 from app.schemas.billing import (
     BillResponse, BillSplitCreate, BillSplitResponse
 )
 
 router = APIRouter(prefix="/billing", tags=["Billing & Receipts"])
 
+
+def _authorize_bill_access(
+    *,
+    restaurant_id: int,
+    table_id: Optional[int],
+    order: Optional[Order],
+    created_at: Optional[datetime],
+    current_user: Optional[User],
+    table_session: Optional[TableSession],
+) -> str:
+    if order is not None:
+        if order.restaurant_id != restaurant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant integrity violation: bill and order belong to different restaurants",
+            )
+        if order.table and order.table.restaurant_id != restaurant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant integrity violation: table belongs to a different restaurant",
+            )
+
+    return authorize_staff_or_table_session_for_table(
+        current_user,
+        table_session,
+        resource_restaurant_id=restaurant_id,
+        resource_table_id=table_id if table_id is not None else (order.table_id if order else None),
+        resource_session_id=order.session_id if order else None,
+        resource_created_at=order.created_at if order else created_at,
+    )
+
+
 @router.get("/order/{order_id}", response_model=BillResponse)
-def get_or_create_bill_for_order(order_id: int, db: Session = Depends(get_db)):
+def get_or_create_bill_for_order(
+    order_id: int,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    table_session: Optional[TableSession] = Depends(get_optional_table_session),
+    db: Session = Depends(get_db),
+):
     bill = db.query(Bill).options(
         joinedload(Bill.splits),
         joinedload(Bill.payments),
         joinedload(Bill.order).joinedload(Order.table)
     ).filter(Bill.order_id == order_id).first()
 
-    if not bill:
+    if bill:
+        _authorize_bill_access(
+            restaurant_id=bill.restaurant_id,
+            table_id=bill.table_id,
+            order=bill.order,
+            created_at=bill.created_at,
+            current_user=current_user,
+            table_session=table_session,
+        )
+    else:
         order = db.query(Order).options(joinedload(Order.table)).filter(Order.id == order_id).first()
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
+
+        _authorize_bill_access(
+            restaurant_id=order.restaurant_id,
+            table_id=order.table_id,
+            order=order,
+            created_at=order.created_at,
+            current_user=current_user,
+            table_session=table_session,
+        )
 
         restaurant = db.query(Restaurant).filter(Restaurant.id == order.restaurant_id).first()
         tax_pct = restaurant.tax_percentage if restaurant else 5.0
@@ -54,7 +115,12 @@ def get_or_create_bill_for_order(order_id: int, db: Session = Depends(get_db)):
     return bill
 
 @router.get("/{bill_id}", response_model=BillResponse)
-def get_bill(bill_id: int, db: Session = Depends(get_db)):
+def get_bill(
+    bill_id: int,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    table_session: Optional[TableSession] = Depends(get_optional_table_session),
+    db: Session = Depends(get_db),
+):
     bill = db.query(Bill).options(
         joinedload(Bill.splits),
         joinedload(Bill.payments),
@@ -64,6 +130,15 @@ def get_bill(bill_id: int, db: Session = Depends(get_db)):
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
 
+    _authorize_bill_access(
+        restaurant_id=bill.restaurant_id,
+        table_id=bill.table_id,
+        order=bill.order,
+        created_at=bill.created_at,
+        current_user=current_user,
+        table_session=table_session,
+    )
+
     if bill.order and bill.order.table:
         bill.table_number = bill.order.table.table_number
     return bill
@@ -72,11 +147,32 @@ def get_bill(bill_id: int, db: Session = Depends(get_db)):
 def configure_bill_splits(
     bill_id: int,
     splits_data: List[BillSplitCreate],
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    table_session: Optional[TableSession] = Depends(get_optional_table_session),
     db: Session = Depends(get_db)
 ):
-    bill = db.query(Bill).filter(Bill.id == bill_id).first()
+    bill = (
+        db.query(Bill)
+        .options(joinedload(Bill.order).joinedload(Order.table))
+        .filter(Bill.id == bill_id)
+        .first()
+    )
     if not bill:
         raise HTTPException(status_code=404, detail="Bill not found")
+
+    _authorize_bill_access(
+        restaurant_id=bill.restaurant_id,
+        table_id=bill.table_id,
+        order=bill.order,
+        created_at=bill.created_at,
+        current_user=current_user,
+        table_session=table_session,
+    )
+
+    if bill.status == BillStatus.PAID:
+        raise HTTPException(status_code=400, detail="Cannot modify splits for a bill that is already paid")
+    if not splits_data or any(sp.amount <= 0 for sp in splits_data):
+        raise HTTPException(status_code=400, detail="All bill split amounts must be greater than zero")
 
     # Remove existing unpaid splits
     db.query(BillSplit).filter(BillSplit.bill_id == bill_id, BillSplit.is_paid == False).delete()
@@ -99,7 +195,12 @@ def configure_bill_splits(
     return created_splits
 
 @router.get("/{bill_id}/receipt")
-def get_printable_receipt(bill_id: int, db: Session = Depends(get_db)):
+def get_printable_receipt(
+    bill_id: int,
+    current_user: Optional[User] = Depends(get_optional_current_user),
+    table_session: Optional[TableSession] = Depends(get_optional_table_session),
+    db: Session = Depends(get_db),
+):
     bill = db.query(Bill).options(
         joinedload(Bill.order).joinedload(Order.items),
         joinedload(Bill.order).joinedload(Order.table),
@@ -110,11 +211,27 @@ def get_printable_receipt(bill_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Bill not found")
 
     order = bill.order
+    _authorize_bill_access(
+        restaurant_id=bill.restaurant_id,
+        table_id=bill.table_id,
+        order=order,
+        created_at=bill.created_at,
+        current_user=current_user,
+        table_session=table_session,
+    )
+
+    restaurant = db.query(Restaurant).filter(Restaurant.id == bill.restaurant_id).first()
+    gst_number = (
+        restaurant.gst_number.strip()
+        if restaurant and restaurant.gst_number and restaurant.gst_number.strip()
+        else None
+    )
+
     return {
-        "restaurant_name": "The Royal Saffron - Smart Bistro & Lounge",
-        "restaurant_gst": "07AABCR9603R1ZM",
+        "restaurant_name": restaurant.name if restaurant else "",
+        "restaurant_gst": gst_number,
         "bill_number": bill.bill_number,
-        "date": bill.created_at.strftime("%d %b %Y %I:%M %p"),
+        "date": bill.created_at.strftime("%d %b %Y %I:%M %p") if bill.created_at else "",
         "table_number": order.table.table_number if order and order.table else "N/A",
         "customer_name": order.customer_name if order else "Guest",
         "items": [

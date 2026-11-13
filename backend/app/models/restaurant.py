@@ -13,7 +13,7 @@ class Restaurant(Base):
     address = Column(Text, nullable=True)
     phone = Column(String(50), nullable=True)
     email = Column(String(100), nullable=True)
-    gst_number = Column(String(50), default="27AABCU9603R1ZM")
+    gst_number = Column(String(50), nullable=True)
     tax_percentage = Column(Float, default=5.0)  # GST 5%
     service_charge_percentage = Column(Float, default=5.0)  # 5%
     currency = Column(String(10), default="INR")

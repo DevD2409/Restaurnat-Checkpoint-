@@ -1,5 +1,6 @@
 import re
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from pydantic import BaseModel, EmailStr
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -42,7 +43,7 @@ class OnboardingRegisterRequest(BaseModel):
     service_charge_percentage: float = 5.0
     timezone: str = "Asia/Kolkata"
     primary_color: str = "#f97316"
-    subscription_plan: str = "PRO"
+    subscription_plan: str = "TRIAL"
 
     # Owner Account Details
     owner_full_name: str
@@ -93,7 +94,13 @@ def onboard_restaurant(data: OnboardingRegisterRequest, db: Session = Depends(ge
     if existing_restaurant:
         raise HTTPException(status_code=400, detail=f"Restaurant slug '{slug}' is already registered. Please choose another.")
 
-    # 2. Check owner username / email & production credential policy
+    # 2. Check owner password policy & production credential policy
+    if len(data.owner_password.strip()) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long",
+        )
+
     if settings.ENVIRONMENT.lower() == "production":
         if is_blocked_demo_password(data.owner_password) or is_demo_seed_account(str(data.owner_email)):
             raise HTTPException(
@@ -107,7 +114,10 @@ def onboard_restaurant(data: OnboardingRegisterRequest, db: Session = Depends(ge
     if existing_user:
         raise HTTPException(status_code=400, detail="Owner username or email is already registered.")
 
-    # 3. Create Tenant Restaurant
+    # 3. Create Tenant Restaurant with Finite 14-Day Trial
+    trial_duration_days = 14
+    trial_expires_at = datetime.now(timezone.utc) + timedelta(days=trial_duration_days)
+
     restaurant = Restaurant(
         name=data.restaurant_name,
         slug=slug,
@@ -122,8 +132,9 @@ def onboard_restaurant(data: OnboardingRegisterRequest, db: Session = Depends(ge
         service_charge_percentage=data.service_charge_percentage,
         timezone=data.timezone,
         primary_color=data.primary_color,
-        subscription_plan=data.subscription_plan,
-        subscription_status="ACTIVE",
+        subscription_plan="TRIAL",
+        subscription_status="TRIAL",
+        subscription_expires_at=trial_expires_at,
         is_active=True
     )
     db.add(restaurant)
@@ -150,19 +161,24 @@ def onboard_restaurant(data: OnboardingRegisterRequest, db: Session = Depends(ge
 
     # 5. Bootstrap Initial Sample Tables with Signed QR Codes
     table_count = data.table_count or 5
+    created_tables = []
     for i in range(1, table_count + 1):
         t_num = f"T{i}"
-        qr_token = generate_table_qr_token(restaurant.id, i, t_num)
         table = Table(
             restaurant_id=restaurant.id,
             table_number=t_num,
             capacity=4,
             section="Main Dining",
             status=TableStatus.AVAILABLE,
-            qr_token=qr_token,
             is_active=True
         )
         db.add(table)
+        created_tables.append(table)
+
+    db.flush()  # Allocate real auto-increment table IDs before signing QR tokens
+
+    for table in created_tables:
+        table.qr_token = generate_table_qr_token(restaurant.id, table.id, table.table_number)
 
     # 6. Bootstrap Initial Starter Menu Category & Sample Item
     category = MenuCategory(

@@ -2,9 +2,13 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import require_roles, oauth2_scheme
-from app.core.security import decode_access_token
+from app.core.dependencies import (
+    STAFF_ROLES as CENTRAL_STAFF_ROLES,
+    require_roles,
+    resolve_explicit_tenant_id,
+)
 from app.models.user import User, UserRole
+from app.models.restaurant import Restaurant
 from app.models.reservation import Reservation, ReservationStatus
 from app.models.table import Table, TableStatus
 from app.schemas.reservation import (
@@ -14,22 +18,25 @@ from app.websocket.connection_manager import manager
 
 router = APIRouter(prefix="/reservations", tags=["Table Reservations"])
 
-STAFF_ROLES = [
-    UserRole.PLATFORM_SUPER_ADMIN,
-    UserRole.RESTAURANT_OWNER,
-    UserRole.ADMIN,
-    UserRole.RESTAURANT_MANAGER,
-    UserRole.MANAGER
-]
-
 @router.post("/", response_model=ReservationResponse, status_code=status.HTTP_201_CREATED)
 async def create_reservation(
     res_data: ReservationCreate,
     db: Session = Depends(get_db)
 ):
     target_id = res_data.restaurant_id or 1
+    restaurant = db.query(Restaurant).filter(Restaurant.id == target_id, Restaurant.is_active == True).first()
+    if not restaurant:
+        raise HTTPException(status_code=404, detail="Restaurant not found")
 
     if res_data.table_id:
+        table = db.query(Table).filter(Table.id == res_data.table_id, Table.is_active == True).first()
+        if not table:
+            raise HTTPException(status_code=400, detail="Invalid table_id")
+        if table.restaurant_id != target_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cross-tenant table reference is not permitted",
+            )
         conflict = db.query(Reservation).filter(
             Reservation.table_id == res_data.table_id,
             Reservation.restaurant_id == target_id,
@@ -72,32 +79,21 @@ async def create_reservation(
 
 @router.get("/", response_model=List[ReservationResponse])
 def get_reservations(
-    date: Optional[str] = None,
-    status: Optional[ReservationStatus] = None,
+    date_filter: Optional[str] = Query(None, alias="date"),
+    status_filter: Optional[ReservationStatus] = Query(None, alias="status"),
     restaurant_id: Optional[int] = Query(None),
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: User = Depends(require_roles(CENTRAL_STAFF_ROLES)),
     db: Session = Depends(get_db)
 ):
     query = db.query(Reservation).options(joinedload(Reservation.table))
 
-    target_id = restaurant_id
-    if token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user:
-                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                    target_id = user.restaurant_id
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
+    query = query.filter(Reservation.restaurant_id == target_id)
 
-    if target_id is not None:
-        query = query.filter(Reservation.restaurant_id == target_id)
-    else:
-        query = query.filter(Reservation.restaurant_id == 1)
-
-    if date:
-        query = query.filter(Reservation.reservation_date == date)
-    if status:
-        query = query.filter(Reservation.status == status)
+    if date_filter:
+        query = query.filter(Reservation.reservation_date == date_filter)
+    if status_filter:
+        query = query.filter(Reservation.status == status_filter)
 
     reservations = query.order_by(Reservation.reservation_date.asc(), Reservation.reservation_time.asc()).all()
     results = []
@@ -125,23 +121,24 @@ async def update_reservation_status(
     res_id: int,
     status_update: ReservationStatusUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(STAFF_ROLES))
+    current_user: User = Depends(require_roles(CENTRAL_STAFF_ROLES))
 ):
     reservation = db.query(Reservation).options(joinedload(Reservation.table)).filter(Reservation.id == res_id).first()
     if not reservation:
         raise HTTPException(status_code=404, detail="Reservation not found")
 
-    if current_user.role != UserRole.PLATFORM_SUPER_ADMIN and reservation.restaurant_id != current_user.restaurant_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: Cannot update reservation belonging to another restaurant"
-        )
+    resolve_explicit_tenant_id(current_user, reservation.restaurant_id)
 
     reservation.status = status_update.status
     if status_update.table_id is not None:
-        table = db.query(Table).filter(Table.id == status_update.table_id).first()
+        table = db.query(Table).filter(Table.id == status_update.table_id, Table.is_active == True).first()
         if not table:
             raise HTTPException(status_code=400, detail="Invalid table_id")
+        if table.restaurant_id != reservation.restaurant_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied: Cannot assign a table belonging to another restaurant",
+            )
         reservation.table_id = status_update.table_id
         if status_update.status == ReservationStatus.CONFIRMED:
             table.status = TableStatus.RESERVED

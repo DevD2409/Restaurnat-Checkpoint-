@@ -70,7 +70,7 @@ class MenuCategoryBase(BaseModel):
     is_active: bool = True
 
 class MenuCategoryCreate(MenuCategoryBase):
-    restaurant_id: int = 1
+    restaurant_id: Optional[int] = None
 
 class MenuCategoryUpdate(BaseModel):
     name: Optional[str] = None

@@ -2,14 +2,34 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_roles, get_tenant_id, oauth2_scheme
-from app.core.security import decode_access_token
+from app.core.dependencies import (
+    get_current_user,
+    get_optional_current_user,
+    get_tenant_id,
+    require_roles,
+    resolve_explicit_tenant_id,
+    resolve_optional_auth_tenant_id,
+)
 from app.core.encryption import encrypt_secret
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
 from app.schemas.restaurant import RestaurantResponse, RestaurantUpdate, RestaurantPublicProfile
 
 router = APIRouter(prefix="/restaurants", tags=["Restaurant Profile & Settings"])
+
+OWNER_ONLY_FIELDS = {
+    "is_active",
+    "razorpay_key_id",
+    "razorpay_key_secret",
+    "razorpay_webhook_secret",
+    "razorpay_key_secret_enc",
+    "razorpay_webhook_secret_enc",
+    "razorpay_account_id",
+    "payment_gateway_mode",
+    "subscription_plan",
+    "subscription_status",
+    "subscription_expires_at",
+}
 
 @router.get("/by-slug/{slug}", response_model=RestaurantPublicProfile)
 def get_restaurant_by_slug(slug: str, db: Session = Depends(get_db)):
@@ -26,6 +46,7 @@ def list_public_restaurants(db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=RestaurantResponse)
 def get_my_restaurant_profile(
+    restaurant_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([
         UserRole.PLATFORM_SUPER_ADMIN,
@@ -38,8 +59,8 @@ def get_my_restaurant_profile(
         UserRole.CASHIER
     ]))
 ):
-    """Returns the authenticated user's own restaurant tenant profile."""
-    target_id = current_user.restaurant_id or 1
+    """Returns the authenticated user's own restaurant tenant profile (or explicit tenant for super-admin)."""
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
     restaurant = db.query(Restaurant).filter(Restaurant.id == target_id).first()
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant profile not found")
@@ -48,23 +69,20 @@ def get_my_restaurant_profile(
 @router.get("/", response_model=RestaurantResponse)
 def get_restaurant_profile(
     restaurant_id: Optional[int] = Query(None),
-    token: Optional[str] = Depends(oauth2_scheme),
+    current_user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Returns restaurant profile:
     - If authenticated staff/owner: resolves their authoritative restaurant.
-    - If super admin: allows querying arbitrary restaurant_id.
+    - If super admin: requires explicit restaurant_id query parameter.
     - If unauthenticated: returns the default active restaurant (for backward compatibility).
     """
-    target_id = restaurant_id
-    if token:
-        payload = decode_access_token(token)
-        if payload and payload.get("sub"):
-            user = db.query(User).filter(User.id == int(payload["sub"])).first()
-            if user:
-                if user.role != UserRole.PLATFORM_SUPER_ADMIN and user.restaurant_id:
-                    target_id = user.restaurant_id
+    target_id = resolve_optional_auth_tenant_id(
+        current_user,
+        restaurant_id,
+        default_public_tenant_id=None,
+    )
 
     if target_id:
         restaurant = db.query(Restaurant).filter(Restaurant.id == target_id).first()
@@ -78,6 +96,7 @@ def get_restaurant_profile(
 @router.put("/", response_model=RestaurantResponse)
 def update_restaurant_profile(
     update_data: RestaurantUpdate,
+    restaurant_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles([
         UserRole.PLATFORM_SUPER_ADMIN,
@@ -91,12 +110,20 @@ def update_restaurant_profile(
     Self-service portal endpoint: Owners and managers can update their own restaurant profile,
     branding, tax, service charges, facilities, Wi-Fi, and payment gateway keys.
     """
-    target_id = current_user.restaurant_id if current_user.role != UserRole.PLATFORM_SUPER_ADMIN else 1
+    target_id = resolve_explicit_tenant_id(current_user, restaurant_id)
     restaurant = db.query(Restaurant).filter(Restaurant.id == target_id).first()
     if not restaurant:
         raise HTTPException(status_code=404, detail="Restaurant profile not found")
 
     update_dict = update_data.model_dump(exclude_unset=True)
+
+    if current_user.role not in [UserRole.PLATFORM_SUPER_ADMIN, UserRole.RESTAURANT_OWNER, UserRole.ADMIN]:
+        disallowed = update_dict.keys() & OWNER_ONLY_FIELDS
+        if disallowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied: Only restaurant owners and platform administrators can modify sensitive tenant fields ({', '.join(sorted(disallowed))}).",
+            )
     
     # Slug uniqueness check if slug is updated
     if "slug" in update_dict and update_dict["slug"] != restaurant.slug:
@@ -152,6 +179,15 @@ def update_specific_restaurant(
         raise HTTPException(status_code=404, detail="Restaurant profile not found")
 
     update_dict = update_data.model_dump(exclude_unset=True)
+
+    if current_user.role not in [UserRole.PLATFORM_SUPER_ADMIN, UserRole.RESTAURANT_OWNER, UserRole.ADMIN]:
+        disallowed = update_dict.keys() & OWNER_ONLY_FIELDS
+        if disallowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied: Only restaurant owners and platform administrators can modify sensitive tenant fields ({', '.join(sorted(disallowed))}).",
+            )
+
     if "slug" in update_dict and update_dict["slug"] != restaurant.slug:
         existing = db.query(Restaurant).filter(Restaurant.slug == update_dict["slug"]).first()
         if existing:

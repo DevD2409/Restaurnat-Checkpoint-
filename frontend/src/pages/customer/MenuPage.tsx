@@ -36,7 +36,7 @@ export const MenuPage: React.FC = () => {
       try {
         const res = await tableApi.validateQR(qrToken);
         if (res.valid && res.table_id && res.table_number) {
-          setTableSession(res.table_id, res.table_number, res.restaurant_id || 1);
+          setTableSession(res.table_id, res.table_number, res.restaurant_id || 1, res.session_token || null);
         }
       } catch (err: any) {
         setQrError(err?.response?.data?.detail || 'Invalid or expired QR code.');

@@ -16,12 +16,22 @@ export const apiClient = axios.create({
   },
 });
 
-// Intercept to add JWT Authorization header if available
+// Intercept to add JWT Authorization and Table Session headers if available
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
   if (token && config.headers) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+
+  try {
+    const sessionToken = sessionStorage.getItem('smart_restaurant_session_token');
+    if (sessionToken && config.headers && !config.headers['X-Table-Session']) {
+      config.headers['X-Table-Session'] = sessionToken;
+    }
+  } catch {
+    // storage unavailable
+  }
+
   return config;
 });
 

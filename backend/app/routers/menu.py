@@ -2,7 +2,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
-from app.core.dependencies import require_roles, get_current_user
+from app.core.dependencies import require_roles, get_current_user, resolve_explicit_tenant_id
 from app.models.user import User, UserRole
 from app.models.restaurant import Restaurant
 from app.models.menu import MenuCategory, MenuItem, MenuCustomizationGroup, MenuCustomizationOption
@@ -30,13 +30,16 @@ def get_categories(
 ):
     """
     Returns menu categories and dishes for a specific restaurant tenant.
-    Enforces tenant isolation by resolving restaurant_id or slug.
+    Enforces tenant isolation by resolving restaurant_id or slug; unknown slugs return 404.
     """
     target_id = restaurant_id
-    if slug:
-        r = db.query(Restaurant).filter(Restaurant.slug == slug).first()
-        if r:
-            target_id = r.id
+    if slug is not None:
+        r = db.query(Restaurant).filter(Restaurant.slug == slug, Restaurant.is_active == True).first()
+        if not r:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+        if target_id is not None and target_id != r.id:
+            raise HTTPException(status_code=400, detail="Mismatched restaurant slug and restaurant_id")
+        target_id = r.id
     
     query = db.query(MenuCategory).options(
         joinedload(MenuCategory.items).joinedload(MenuItem.customization_groups).joinedload(MenuCustomizationGroup.options)
@@ -63,11 +66,7 @@ def create_category(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_roles(MENU_MANAGERS))
 ):
-    target_restaurant_id = current_user.restaurant_id
-    if current_user.role == UserRole.PLATFORM_SUPER_ADMIN and cat_data.restaurant_id:
-        target_restaurant_id = cat_data.restaurant_id
-    if not target_restaurant_id:
-        target_restaurant_id = 1
+    target_restaurant_id = resolve_explicit_tenant_id(current_user, cat_data.restaurant_id)
 
     cat = MenuCategory(
         restaurant_id=target_restaurant_id,
@@ -130,18 +129,31 @@ def delete_category(
 @router.get("/items", response_model=List[MenuItemResponse])
 def get_items(
     restaurant_id: Optional[int] = None,
+    slug: Optional[str] = Query(None),
     category_id: Optional[int] = None,
     is_veg: Optional[bool] = None,
     search: Optional[str] = None,
     available_only: bool = True,
     db: Session = Depends(get_db)
 ):
+    target_id = restaurant_id
+    if slug is not None:
+        r = db.query(Restaurant).filter(Restaurant.slug == slug, Restaurant.is_active == True).first()
+        if not r:
+            raise HTTPException(status_code=404, detail="Restaurant not found")
+        if target_id is not None and target_id != r.id:
+            raise HTTPException(status_code=400, detail="Mismatched restaurant slug and restaurant_id")
+        target_id = r.id
+
     query = db.query(MenuItem).options(
         joinedload(MenuItem.customization_groups).joinedload(MenuCustomizationGroup.options)
     )
 
-    if restaurant_id:
-        query = query.filter(MenuItem.restaurant_id == restaurant_id)
+    if target_id is not None:
+        query = query.filter(MenuItem.restaurant_id == target_id)
+    else:
+        # Default fallback to primary tenant (for backward compatibility)
+        query = query.filter(MenuItem.restaurant_id == 1)
     if category_id:
         query = query.filter(MenuItem.category_id == category_id)
     if is_veg is not None:
